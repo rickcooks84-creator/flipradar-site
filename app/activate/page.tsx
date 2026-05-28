@@ -2,10 +2,10 @@
 import { useState } from "react";
 import Link from "next/link";
 
-const BORDER  = "#27272a";
-const MUTED   = "#71717a";
-const SURFACE = "#18181b";
-const GREEN   = "#86efac";
+const BORDER  = "#1a3a2e";
+const MUTED   = "#5a8a78";
+const SURFACE = "#0d1e2b";
+const GREEN   = "#00ff88";
 
 export default function Activate() {
   const [key, setKey]       = useState("");
