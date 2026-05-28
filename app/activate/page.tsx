@@ -45,7 +45,7 @@ export default function Activate() {
           <div style={{ width: "30px", height: "30px", borderRadius: "7px", background: "linear-gradient(135deg, #0064D2, #7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "15px" }}>📡</div>
           <span style={{ fontWeight: 800, fontSize: "15px", letterSpacing: "-0.03em" }}>FlipSonar</span>
         </Link>
-        <a href="https://whop.com" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", fontWeight: 600, padding: "8px 18px", background: "#0064D2", borderRadius: "7px", color: "#fff" }}>
+        <a href="https://whop.com/checkout/plan_k2FTmWkCEj04H" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", fontWeight: 600, padding: "8px 18px", background: "#0064D2", borderRadius: "7px", color: "#fff" }}>
           Buy Now →
         </a>
       </nav>
@@ -133,7 +133,7 @@ export default function Activate() {
             {/* Download button (shown after verification) */}
             {status === "ok" && (
               <a
-                href="/FlipSonar-Setup.exe"
+                href="https://github.com/rickcooks84-creator/flipsonar-releases/releases/download/v1.0.0/FlipSonar.exe"
                 download
                 style={{
                   display: "block",
@@ -174,7 +174,7 @@ export default function Activate() {
             {/* Purchase link */}
             <div style={{ textAlign: "center", paddingTop: "4px" }}>
               <span style={{ fontSize: "13px", color: MUTED }}>Don't have a key?{" "}</span>
-              <a href="https://whop.com" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", color: "#60a5fa", fontWeight: 600 }}>
+              <a href="https://whop.com/checkout/plan_k2FTmWkCEj04H" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", color: "#60a5fa", fontWeight: 600 }}>
                 Purchase on Whop →
               </a>
             </div>
@@ -183,7 +183,7 @@ export default function Activate() {
           {/* Support */}
           <p style={{ textAlign: "center", fontSize: "12px", color: MUTED, marginTop: "24px" }}>
             Need help?{" "}
-            <a href="mailto:support@flipradar.io" style={{ color: MUTED, textDecoration: "underline" }}>
+            <a href="mailto:support@flipsonar.io" style={{ color: MUTED, textDecoration: "underline" }}>
               Contact support
             </a>
           </p>
