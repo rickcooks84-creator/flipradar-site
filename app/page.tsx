@@ -24,7 +24,7 @@ const FEATURES = [
   { icon: "📊", title: "Live eBay sold comps", body: "Checks eBay completed listings in real time. Median price, sold count, and velocity per product." },
   { icon: "🎯", title: "1–100 buy score", body: "Each product gets a score based on ROI and sell-through volume. S = buy now. F = skip." },
   { icon: "💰", title: "Live profit calculator", body: "Enter your cost and watch profit and ROI update instantly across every row." },
-  { icon: "⚡", title: "Fast, private, offline", body: "Desktop app. No data leaves your machine. No subscriptions beyond the one-time license." },
+  { icon: "⚡", title: "Fast, private, offline", body: "Desktop app. No data leaves your machine. Cancel your subscription anytime." },
 ];
 
 const STEPS = [
@@ -207,13 +207,13 @@ export default function Home() {
       {/* Pricing */}
       <section style={{ maxWidth: "480px", margin: "0 auto 96px", padding: "0 32px", textAlign: "center" }}>
         <h2 style={{ fontSize: "32px", fontWeight: 800, letterSpacing: "-0.03em", marginBottom: "8px" }}>Simple pricing</h2>
-        <p style={{ color: MUTED, marginBottom: "40px", fontSize: "15px" }}>One-time purchase. No subscriptions.</p>
+        <p style={{ color: MUTED, marginBottom: "40px", fontSize: "15px" }}>Simple monthly pricing. Cancel anytime.</p>
         <div style={{ background: SURFACE, border: `1px solid ${GREEN}40`, borderRadius: "16px", padding: "40px", boxShadow: `0 0 40px ${GREEN}10` }}>
-          <div style={{ fontSize: "14px", color: MUTED, marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.08em" }}>Lifetime License</div>
-          <div style={{ fontSize: "52px", fontWeight: 900, letterSpacing: "-0.04em", marginBottom: "4px", color: GREEN, textShadow: `0 0 30px ${GREEN}60` }}>$XX</div>
-          <div style={{ color: MUTED, fontSize: "13px", marginBottom: "32px" }}>one-time · no monthly fee</div>
+          <div style={{ fontSize: "14px", color: MUTED, marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.08em" }}>Monthly License</div>
+          <div style={{ fontSize: "52px", fontWeight: 900, letterSpacing: "-0.04em", marginBottom: "4px", color: GREEN, textShadow: `0 0 30px ${GREEN}60` }}>$9.99</div>
+          <div style={{ color: MUTED, fontSize: "13px", marginBottom: "32px" }}>per month · cancel anytime</div>
           <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "32px", textAlign: "left" }}>
-            {["Unlimited scans", "eBay sold comps on every product", "1–100 buy score + profit calculator", "Sort & filter by sold volume, ROI, profit", "All future updates included", "Windows desktop app"].map(f => (
+            {["Unlimited scans", "eBay sold comps on every product", "1–100 buy score + profit calculator", "Sort & filter by sold volume, ROI, profit", "All future updates included", "Windows desktop app", "Cancel anytime"].map(f => (
               <div key={f} style={{ display: "flex", gap: "10px", alignItems: "center", fontSize: "14px" }}>
                 <span style={{ color: GREEN, fontWeight: 700 }}>✓</span> {f}
               </div>
