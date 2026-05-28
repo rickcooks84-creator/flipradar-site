@@ -43,7 +43,7 @@ export default function Activate() {
       <nav style={{ borderBottom: `1px solid ${BORDER}`, padding: "0 32px", height: "56px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "#09090bdd", backdropFilter: "blur(12px)", zIndex: 50 }}>
         <Link href="/" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <div style={{ width: "30px", height: "30px", borderRadius: "7px", background: "linear-gradient(135deg, #0064D2, #7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "15px" }}>📡</div>
-          <span style={{ fontWeight: 800, fontSize: "15px", letterSpacing: "-0.03em" }}>FlipRadar</span>
+          <span style={{ fontWeight: 800, fontSize: "15px", letterSpacing: "-0.03em" }}>FlipSonar</span>
         </Link>
         <a href="https://whop.com" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", fontWeight: 600, padding: "8px 18px", background: "#0064D2", borderRadius: "7px", color: "#fff" }}>
           Buy Now →
@@ -57,7 +57,7 @@ export default function Activate() {
           {/* Header */}
           <div style={{ textAlign: "center", marginBottom: "40px" }}>
             <div style={{ width: "56px", height: "56px", borderRadius: "14px", background: "linear-gradient(135deg, #0064D2, #7c3aed)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "26px", margin: "0 auto 20px" }}>📡</div>
-            <h1 style={{ fontSize: "28px", fontWeight: 900, letterSpacing: "-0.03em", marginBottom: "8px" }}>Activate FlipRadar</h1>
+            <h1 style={{ fontSize: "28px", fontWeight: 900, letterSpacing: "-0.03em", marginBottom: "8px" }}>Activate FlipSonar</h1>
             <p style={{ color: MUTED, fontSize: "14px", lineHeight: 1.6 }}>
               Enter your license key to verify your purchase and download the app.
             </p>
@@ -133,7 +133,7 @@ export default function Activate() {
             {/* Download button (shown after verification) */}
             {status === "ok" && (
               <a
-                href="/FlipRadar-Setup.exe"
+                href="/FlipSonar-Setup.exe"
                 download
                 style={{
                   display: "block",
@@ -148,7 +148,7 @@ export default function Activate() {
                   marginBottom: "20px",
                 }}
               >
-                ⬇ Download FlipRadar for Windows
+                ⬇ Download FlipSonar for Windows
               </a>
             )}
 
@@ -160,7 +160,7 @@ export default function Activate() {
               <div style={{ fontSize: "12px", fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "14px" }}>Setup Instructions</div>
               {[
                 "Download and run the installer above",
-                "Launch FlipRadar — it opens to the activation screen",
+                "Launch FlipSonar — it opens to the activation screen",
                 "Paste your license key and click Activate",
                 "Start scanning stores and finding flips",
               ].map((step, i) => (
@@ -195,9 +195,9 @@ export default function Activate() {
       <footer style={{ borderTop: `1px solid ${BORDER}`, padding: "20px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span style={{ fontSize: "16px" }}>📡</span>
-          <span style={{ fontWeight: 700, fontSize: "13px" }}>FlipRadar</span>
+          <span style={{ fontWeight: 700, fontSize: "13px" }}>FlipSonar</span>
         </div>
-        <div style={{ fontSize: "12px", color: MUTED }}>© {new Date().getFullYear()} FlipRadar. All rights reserved.</div>
+        <div style={{ fontSize: "12px", color: MUTED }}>© {new Date().getFullYear()} FlipSonar. All rights reserved.</div>
         <Link href="/" style={{ fontSize: "13px", color: MUTED }}>← Back to home</Link>
       </footer>
 
