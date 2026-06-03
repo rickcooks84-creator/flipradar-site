@@ -35,7 +35,10 @@ function verifyWhopSignature(rawBody: string, headers: Headers): boolean {
     return false;
   }
 
-  const keyBytes = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+  // Whop's secret is `ws_...`. The SDK uses it as `btoa(secret)`, which the
+  // Standard Webhooks lib base64-decodes straight back to the raw string bytes,
+  // so the HMAC key is simply the full secret string (NOT base64-decoded).
+  const keyBytes = Buffer.from(secret, "utf8");
   const signedContent = `${id}.${timestamp}.${rawBody}`;
   const expected = crypto
     .createHmac("sha256", keyBytes)
@@ -124,10 +127,15 @@ export async function POST(req: NextRequest) {
   }
 
   const action = event?.action || event?.event;
-  // Only email on a brand-new membership so each buyer gets exactly one key email.
-  // Whop spells this "membership_activated"; accept the dotted form too, just in case.
+  // Email the key when a membership becomes active. Whop fires "membership.went_valid"
+  // on checkout and (for some products) "membership.activated" — accept either so the
+  // email sends regardless of which event the webhook is subscribed to. Dots are
+  // normalized to underscores to be tolerant of formatting.
+  // NOTE: went_valid can re-fire on renewals; if duplicate emails become a problem,
+  // add a KV dedupe on the membership id.
+  const TRIGGER_EVENTS = new Set(["membership_went_valid", "membership_activated"]);
   const normalized = String(action ?? "").replace(/\./g, "_");
-  if (normalized !== "membership_activated") {
+  if (!TRIGGER_EVENTS.has(normalized)) {
     return NextResponse.json({ ok: true, ignored: action ?? "unknown" });
   }
 
