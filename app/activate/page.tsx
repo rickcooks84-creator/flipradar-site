@@ -49,7 +49,7 @@ export default function Activate() {
           <div style={{ width: "30px", height: "30px", borderRadius: "7px", background: "linear-gradient(135deg, #003a20, #006640)", border: `1px solid ${GREEN}40`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "15px", boxShadow: `0 0 12px ${GREEN}30` }}>📡</div>
           <span style={{ fontWeight: 800, fontSize: "15px", letterSpacing: "-0.03em", color: GREEN }}>FlipSonar</span>
         </Link>
-        <a href="https://whop.com/checkout/plan_k2FTmWkCEj04H" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", fontWeight: 600, padding: "8px 18px", background: DIM, border: `1px solid ${GREEN}50`, borderRadius: "7px", color: GREEN, boxShadow: `0 0 12px ${GREEN}20` }}>
+        <a href="https://whop.com/flipsonar/flipsonar-monthly/" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", fontWeight: 600, padding: "8px 18px", background: DIM, border: `1px solid ${GREEN}50`, borderRadius: "7px", color: GREEN, boxShadow: `0 0 12px ${GREEN}20` }}>
           Buy Now →
         </a>
       </nav>
@@ -183,7 +183,7 @@ export default function Activate() {
             {/* Purchase link */}
             <div style={{ textAlign: "center", paddingTop: "4px" }}>
               <span style={{ fontSize: "13px", color: MUTED }}>Don't have a key?{" "}</span>
-              <a href="https://whop.com/checkout/plan_k2FTmWkCEj04H" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", color: GREEN, fontWeight: 600 }}>
+              <a href="https://whop.com/flipsonar/flipsonar-monthly/" target="_blank" rel="noopener noreferrer" style={{ fontSize: "13px", color: GREEN, fontWeight: 600 }}>
                 Purchase on Whop →
               </a>
             </div>
