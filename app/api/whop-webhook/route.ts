@@ -125,7 +125,9 @@ export async function POST(req: NextRequest) {
 
   const action = event?.action || event?.event;
   // Only email on a brand-new membership so each buyer gets exactly one key email.
-  if (action !== "membership.activated") {
+  // Whop spells this "membership_activated"; accept the dotted form too, just in case.
+  const normalized = String(action ?? "").replace(/\./g, "_");
+  if (normalized !== "membership_activated") {
     return NextResponse.json({ ok: true, ignored: action ?? "unknown" });
   }
 
