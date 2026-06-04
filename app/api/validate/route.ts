@@ -12,17 +12,17 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // Validate by fetching the membership and checking it's valid. We do NOT use Whop's
+    // validate_license endpoint: it 400s for trialing / 100%-off-coupon memberships even
+    // though they're perfectly valid (valid:true). A plain GET works for trial AND paid.
     const res = await fetch(
-      `https://api.whop.com/api/v2/memberships/${encodeURIComponent(key.trim())}/validate_license`,
-      {
-        method:  "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body:    JSON.stringify({}),
-      }
+      `https://api.whop.com/api/v2/memberships/${encodeURIComponent(key.trim())}`,
+      { headers: { Authorization: `Bearer ${apiKey}`, Accept: "application/json" } }
     );
 
-    if (res.status === 200 || res.status === 201) {
-      return NextResponse.json({ valid: true });
+    if (res.ok) {
+      const m = await res.json().catch(() => ({}));
+      if (m?.valid === true) return NextResponse.json({ valid: true });
     }
 
     return NextResponse.json({ valid: false, error: "Invalid or expired license key." }, { status: 400 });
