@@ -87,6 +87,7 @@ export default function Home() {
         </div>
         <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
           <a href="#faq" style={{ fontSize: "13px", color: MUTED, padding: "6px 12px" }}>FAQ</a>
+          <Link href="/login" style={{ fontSize: "13px", fontWeight: 600, color: GREEN, padding: "6px 12px" }}>Log In</Link>
           <Link href="/activate" style={{ fontSize: "13px", fontWeight: 600, padding: "8px 18px", background: DIM, border: `1px solid ${GREEN}50`, borderRadius: "7px", color: GREEN, boxShadow: `0 0 12px ${GREEN}20` }}>
             Get Started →
           </Link>
