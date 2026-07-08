@@ -5,7 +5,10 @@ import { getCarPartComps, carPartQuery } from '@/app/lib/car-comps';
 import { scoreProduct, type ScoreResult } from '@/app/lib/scorer';
 import type { SoldComps } from '@/app/lib/ebay';
 
-export const maxDuration = 60; // Vercel: allow the parallel comp sweep to finish
+// No maxDuration override: the UI drives ONE part per request (see /api/vehicle-parts +
+// the client pool), so each call finishes in a couple seconds and fits any Vercel plan's
+// function limit (incl. Hobby's 10s). We deliberately DON'T set maxDuration=60 — that
+// would fail the build on Hobby. A whole-vehicle batch (no `only`) still works locally.
 
 interface PartResult {
   id: string;
@@ -88,17 +91,20 @@ export async function POST(req: NextRequest) {
     // soft-block/interstitial (proven: the same query returns 60 items on retry), not a
     // genuine no-comps. A REAL empty (page parsed fine but nothing matched the vehicle)
     // has parsed > 0 and is treated as final so we don't waste requests.
+    // Retry budget is kept tight so a SINGLE-part request stays well under a 10s function
+    // limit: at most 3 fetches (8s ceiling each) with short backoffs. The client re-checks
+    // anything that still comes back 'failed'.
     let comps: SoldComps | null = null;
     let outcome: PartResult['outcome'] = 'failed';
-    const MAX = 3;
+    const MAX = 2;
     for (let attempt = 0; attempt <= MAX; attempt++) {
-      const res = await getCarPartComps(vehicle, part, 12000);
+      const res = await getCarPartComps(vehicle, part, 8000);
       comps = res.comps;
       if (res.status === 'exhausted') { keysExhausted = true; outcome = 'failed'; break; }
       if (res.status === 'ok') { outcome = 'ok'; break; }
       if (res.status === 'empty' && res.parsed > 0) { outcome = 'empty'; break; } // genuine no-match
       outcome = 'failed';
-      if (attempt < MAX) await new Promise(r => setTimeout(r, 700 * (attempt + 1) + Math.random() * 500));
+      if (attempt < MAX) await new Promise(r => setTimeout(r, 500 * (attempt + 1) + Math.random() * 300));
     }
 
     const score = scoreProduct(cost, comps!, shipping);
