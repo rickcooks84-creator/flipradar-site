@@ -18,5 +18,12 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/vehicle/:path*', '/api/vehicle-scan/:path*', '/api/vin/:path*'],
+  matcher: [
+    '/scan/:path*',
+    '/api/store-scrape/:path*',
+    '/api/comp/:path*',
+    '/api/vehicle-scan/:path*',
+    '/api/vehicle-parts/:path*',
+    '/api/vin/:path*',
+  ],
 };

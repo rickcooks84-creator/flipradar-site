@@ -19,7 +19,7 @@ export default function LoginPage() {
         body: JSON.stringify({ key: key.trim() }),
       });
       const d = await r.json();
-      if (d.success) window.location.href = "/vehicle";
+      if (d.success) window.location.href = "/scan";
       else setError(d.error || "Login failed.");
     } catch {
       setError("Couldn’t reach the server. Check your connection.");
