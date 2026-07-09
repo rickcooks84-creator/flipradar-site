@@ -33,9 +33,9 @@ export default function LoginPage() {
       <div style={{ width: "100%", maxWidth: 380, position: "relative", zIndex: 1 }}>
         <div style={{ textAlign: "center", marginBottom: 26 }}>
           <div style={{ width: 46, height: 46, margin: "0 auto", borderRadius: 11, background: "linear-gradient(135deg, #003a20, #006640)", border: `1px solid ${GREEN}40`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, boxShadow: `0 0 18px ${GREEN}30` }}>📡</div>
-          <div style={{ fontWeight: 800, fontSize: 24, letterSpacing: "-0.03em", marginTop: 12, color: GREEN }}>FlipSonar Yard</div>
+          <div style={{ fontWeight: 800, fontSize: 24, letterSpacing: "-0.03em", marginTop: 12, color: GREEN }}>FlipSonar</div>
           <div style={{ color: MUTED, fontSize: 13, marginTop: 8, lineHeight: 1.5 }}>
-            Log in with your license key to scan junkyard cars for flippable parts.
+            Log in with your license key to scan stores and vehicles for flips.
           </div>
         </div>
 
