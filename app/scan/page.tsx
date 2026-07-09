@@ -13,10 +13,40 @@ interface Comps { found: boolean; count: number; median: number; low: number; hi
 interface Score { score: number; estimatedProfit: number; roi: number; netRevenue: number; grade: string; reason: string; }
 interface Result { comps: Comps; score: Score | null; outcome: Outcome; query: string; cost: number; note?: string; }
 interface Row {
-  id: string; label: string; sub?: string; imageUrl?: string; productUrl?: string;
+  id: string; label: string; sub?: string; category?: string; imageUrl?: string; productUrl?: string;
   query: string; cost: number; status: "pending" | "busy" | "done"; result?: Result;
 }
 interface Vehicle { label: string; year: string; make: string; model: string; engine?: string; bodyClass?: string; }
+
+type SortBy = "best" | "median" | "profit" | "sold";
+type Tier = "pending" | "recheck" | "pull" | "maybe" | "skip" | "none";
+
+const CAT_META: Record<string, { icon: string; label: string }> = {
+  lighting: { icon: "🔦", label: "Lighting" }, engine: { icon: "⚙️", label: "Engine" },
+  electrical: { icon: "🔌", label: "Electrical" }, interior: { icon: "🪑", label: "Interior" },
+  body: { icon: "🚪", label: "Body" }, wheels: { icon: "⭕", label: "Wheels" },
+  emissions: { icon: "♻️", label: "Emissions" }, drivetrain: { icon: "⚙️", label: "Drivetrain" },
+};
+
+function tier(r: Row): Tier {
+  if (r.status !== "done" || !r.result) return "pending";
+  const x = r.result;
+  if (x.outcome === "failed") return "recheck";
+  if (x.outcome === "empty" || !x.comps.found) return "none";
+  const s = x.score?.score ?? 0;
+  if (s >= 55) return "pull";
+  if (s >= 40) return "maybe";
+  return "skip";
+}
+const TIER_COLOR: Record<Tier, string> = { pending: BORDER, recheck: AMBER, pull: GREEN, maybe: AMBER, skip: RED, none: MUTED };
+function sortVal(r: Row, by: SortBy): number {
+  const x = r.result;
+  if (!x || !x.comps.found) return -1;
+  if (by === "median") return x.comps.median;
+  if (by === "profit") return x.score?.estimatedProfit ?? -1;
+  if (by === "sold") return x.comps.count;
+  return x.score?.score ?? -1;
+}
 
 const money = (n: number) => "$" + (n >= 100 ? Math.round(n) : n.toFixed(0));
 function ebayUrl(q: string) {
@@ -201,7 +231,7 @@ function VehiclePanel() {
       const pd = await pr.json();
       if (pd.error) { setError(pd.error); setBusy(false); return; }
       const v: Vehicle = pd.vehicle;
-      const initial: Row[] = pd.parts.map((p: any) => ({ id: p.id, label: p.label, sub: p.category, query: "", cost: 0, status: "pending" as const }));
+      const initial: Row[] = pd.parts.map((p: any) => ({ id: p.id, label: p.label, sub: p.category, category: p.category, query: "", cost: 0, status: "pending" as const }));
       setVehicle(v); setRows(initial);
       await runPool(initial.map(r => r.id), 6, (id) => scanOne(v, id));
       setRows(prev => [...prev].sort((a, b) => (b.result?.score?.score ?? -1) - (a.result?.score?.score ?? -1)));
@@ -266,16 +296,81 @@ function SummaryCard(props: { title: string; subtitle?: string; done: number; to
 }
 
 function RowList({ rows, buyWord, showImage, expanded, setExpanded, onRecheck }: { rows: Row[]; buyWord: string; showImage?: boolean; expanded: string | null; setExpanded: (s: string | null) => void; onRecheck: (row: Row) => void }) {
+  const [sortBy, setSortBy] = useState<SortBy>("best");
+  const [cat, setCat] = useState<string | null>(null);
+  const [winnersOnly, setWinnersOnly] = useState(false);
+
+  const cats = Array.from(new Set(rows.map(r => r.category).filter(Boolean))) as string[];
+  const activeCat = cat && cats.includes(cat) ? cat : null;
+
+  // Top picks: best "pull/buy" rows ranked by est. profit (fallback to median), up to 3.
+  const topPicks = [...rows.filter(r => tier(r) === "pull")].sort((a, b) => {
+    const pa = a.result!.score?.estimatedProfit ?? a.result!.comps.median;
+    const pb = b.result!.score?.estimatedProfit ?? b.result!.comps.median;
+    return pb - pa;
+  }).slice(0, 3);
+
+  // Visible list: apply category + winners-only filters, then sort.
+  let view = rows.filter(r => !activeCat || r.category === activeCat);
+  if (winnersOnly) view = view.filter(r => { const t = tier(r); return t === "pull" || t === "maybe" || t === "pending" || t === "recheck"; });
+  view = [...view].sort((a, b) => sortVal(b, sortBy) - sortVal(a, sortBy));
+  const hiddenCount = rows.length - view.length;
+
+  const SORTS: [SortBy, string][] = [["best", "Best"], ["median", "$ Median"], ["profit", "Profit"], ["sold", "Sold"]];
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {rows.map(row => {
+    <div>
+      {/* Top picks */}
+      {topPicks.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 11, fontWeight: 800, color: GREEN, letterSpacing: "0.06em", marginBottom: 7 }}>🔥 TOP PICKS — GRAB THESE FIRST</div>
+          <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
+            {topPicks.map((r, i) => {
+              const tp = r.result!;
+              return (
+                <button key={r.id} onClick={() => setExpanded(r.id)} style={{ flex: "0 0 auto", minWidth: 148, textAlign: "left", background: "#0c2318", border: `1px solid ${GREEN}55`, borderRadius: 11, padding: "10px 12px", boxShadow: `0 0 16px ${GREEN}12`, color: FG }}>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: GREEN }}>#{i + 1}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 150 }}>{r.label}</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, fontFamily: MONO, marginTop: 2 }}>{money(tp.comps.median)}</div>
+                  <div style={{ fontSize: 11, color: GREEN }}>{tp.score && tp.cost > 0 ? `+${money(tp.score.estimatedProfit)} profit` : `${tp.comps.count} sold`}</div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Sort + winners-only */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 10, flexWrap: "wrap" }}>
+        {SORTS.map(([k, lbl]) => (
+          <button key={k} onClick={() => setSortBy(k)} style={{ fontSize: 12, fontWeight: 700, padding: "6px 11px", borderRadius: 8, background: sortBy === k ? DIM : "transparent", color: sortBy === k ? GREEN : MUTED, border: `1px solid ${sortBy === k ? GREEN + "55" : BORDER}` }}>{lbl}</button>
+        ))}
+        <button onClick={() => setWinnersOnly(w => !w)} style={{ marginLeft: "auto", fontSize: 12, fontWeight: 700, padding: "6px 11px", borderRadius: 999, background: winnersOnly ? DIM : "transparent", color: winnersOnly ? GREEN : MUTED, border: `1px solid ${winnersOnly ? GREEN + "55" : BORDER}` }}>{winnersOnly ? "✓ Winners only" : "Winners only"}</button>
+      </div>
+
+      {/* Category chips */}
+      {cats.length > 1 && (
+        <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, marginBottom: 8 }}>
+          <Chip active={!activeCat} onClick={() => setCat(null)} label={`All (${rows.length})`} />
+          {cats.map(c => {
+            const meta = CAT_META[c] || { icon: "•", label: c };
+            const n = rows.filter(r => r.category === c).length;
+            return <Chip key={c} active={activeCat === c} onClick={() => setCat(c)} label={`${meta.icon} ${meta.label} (${n})`} />;
+          })}
+        </div>
+      )}
+
+      {/* List */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {view.map(row => {
         const v = verdict(row, buyWord);
         const isOpen = expanded === row.id;
         const p = row.result;
         const pending = row.status !== "done";
         const q = p?.query || row.query;
+        const tc = TIER_COLOR[tier(row)];
         return (
-          <div key={row.id} style={{ background: SURFACE, border: `1px solid ${isOpen ? GREEN + "40" : BORDER}`, borderRadius: 12, overflow: "hidden", opacity: pending ? 0.7 : 1 }}>
+          <div key={row.id} style={{ background: SURFACE, border: `1px solid ${isOpen ? GREEN + "40" : BORDER}`, borderLeft: `3px solid ${tc}`, borderRadius: 12, overflow: "hidden", opacity: pending ? 0.7 : 1 }}>
             <button onClick={() => !pending && setExpanded(isOpen ? null : row.id)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 11, padding: "10px 12px", background: "transparent", border: "none", color: FG, textAlign: "left" }}>
               <div style={{ flex: "0 0 72px", fontSize: 12, fontWeight: 800, color: v?.color ?? MUTED, background: v?.bg ?? "#0d1e2b", border: `1px solid ${(v?.color ?? MUTED)}44`, borderRadius: 8, padding: "6px 0", textAlign: "center", letterSpacing: "0.03em" }}>
                 {pending ? <Spinner /> : v?.label}
@@ -324,8 +419,14 @@ function RowList({ rows, buyWord, showImage, expanded, setExpanded, onRecheck }:
           </div>
         );
       })}
+      </div>
+      {winnersOnly && hiddenCount > 0 && <div style={{ fontSize: 11, color: MUTED, textAlign: "center", padding: 10 }}>{hiddenCount} hidden (skip / no market)</div>}
     </div>
   );
+}
+
+function Chip({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return <button onClick={onClick} style={{ flex: "0 0 auto", whiteSpace: "nowrap", fontSize: 12, fontWeight: 700, padding: "7px 12px", borderRadius: 999, background: active ? DIM : "transparent", color: active ? GREEN : MUTED, border: `1px solid ${active ? GREEN + "55" : BORDER}` }}>{label}</button>;
 }
 
 function Spinner() { return <span style={{ display: "inline-block", width: 11, height: 11, border: `2px solid ${MUTED}55`, borderTopColor: GREEN, borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />; }
