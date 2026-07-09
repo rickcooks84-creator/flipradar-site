@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { unstable_cache } from 'next/cache';
 import { isStopSignaled } from './stop-signal';
 
 export interface SoldComps {
@@ -404,17 +405,10 @@ function buildSearchUrl(keywords: string): string {
 async function searchOnce(keywords: string, queryTokens: string[], timeoutMs: number): Promise<EbayResult> {
   if (isStopSignaled()) return { status: 'error', comps: EMPTY };
 
-  const raw = await fetchRaw(buildSearchUrl(keywords), timeoutMs);
-  if (!raw) return { status: 'error', comps: EMPTY };
-  if (raw.status === 402) return { status: 'exhausted', comps: EMPTY }; // all keys out of credits
-  if (raw.status === 429 || raw.status === 403) return { status: 'throttled', comps: EMPTY };
+  // Goes through the CACHED item fetch, so a repeat store query costs 0 ScraperAPI requests.
+  const { status, items } = await fetchSoldItems(keywords, timeoutMs);
+  if (status !== 'ok') return { status, comps: EMPTY };
 
-  if (!raw.ok || !raw.html) return { status: 'error', comps: EMPTY };
-
-  const $ = cheerio.load(raw.html);
-  if (isThrottlePage(raw.html, $)) return { status: 'throttled', comps: EMPTY };
-
-  const items = parseItems(raw.html, $);
   const prices = relevantPrices(items, queryTokens).filter(p => p > 0);
   if (!prices.length) return { status: 'empty', comps: EMPTY };
 
@@ -431,8 +425,8 @@ async function searchOnce(keywords: string, queryTokens: string[], timeoutMs: nu
 // stops BEFORE relevance filtering and passes `keywords` verbatim into _nkw (year intact).
 export interface SoldItemsResult { status: FetchStatus; items: EbayItem[]; }
 
-export async function fetchSoldItems(keywords: string, timeoutMs = 12000): Promise<SoldItemsResult> {
-  if (isStopSignaled()) return { status: 'error', items: [] };
+// The uncached fetch: exactly ONE ScraperAPI request → parsed (title, price) items.
+async function fetchSoldItemsUncached(keywords: string, timeoutMs: number): Promise<SoldItemsResult> {
   const kw = (keywords || '').trim();
   if (!kw) return { status: 'empty', items: [] };
 
@@ -447,6 +441,42 @@ export async function fetchSoldItems(keywords: string, timeoutMs = 12000): Promi
 
   const items = parseItems(raw.html, $);
   return { status: items.length ? 'ok' : 'empty', items };
+}
+
+// ─── Persistent comp cache (Next.js Data Cache — NO external datastore) ────────
+//
+// eBay lookups are the ONLY thing that costs money (ScraperAPI credits), and the same
+// vehicles + parts get scanned over and over (every yard is full of F-150s / Civics). So we
+// cache the parsed eBay items BY QUERY across requests, deployments, AND users — a repeat
+// lookup is then served from the Data Cache with ZERO ScraperAPI requests. On Vercel this is
+// the shared Data Cache; on the self-hosted desktop it persists to .next/cache on disk.
+// We cache ONLY real successful pages: the inner fn THROWS on anything else, and Next never
+// persists a thrown result, so throttles/errors/empties are re-fetched next time and never
+// poison the cache. Bump the version key ('…-v1') to invalidate everything at once.
+const COMP_CACHE_TTL = 60 * 60 * 24 * 14; // 14 days — sold prices barely move in two weeks
+
+const cachedItems = unstable_cache(
+  async (keywords: string): Promise<EbayItem[]> => {
+    const res = await fetchSoldItemsUncached(keywords, 9000);
+    if (res.status !== 'ok' || !res.items.length) throw new Error('NOCACHE:' + res.status);
+    return res.items;
+  },
+  ['ebay-sold-items-v1'],
+  { revalidate: COMP_CACHE_TTL, tags: ['ebay-comps'] },
+);
+
+export async function fetchSoldItems(keywords: string, _timeoutMs = 12000): Promise<SoldItemsResult> {
+  if (isStopSignaled()) return { status: 'error', items: [] };
+  const kw = (keywords || '').trim();
+  if (!kw) return { status: 'empty', items: [] };
+  try {
+    const items = await cachedItems(kw);   // cache HIT → no ScraperAPI request
+    return { status: 'ok', items };
+  } catch (e: any) {
+    const m = String(e?.message || '');
+    if (m.startsWith('NOCACHE:')) return { status: m.slice(8) as FetchStatus, items: [] };
+    return { status: 'error', items: [] };
+  }
 }
 
 // ─── Public: getSoldComps with bounded tiers + scheduler-driven retry hook ────
