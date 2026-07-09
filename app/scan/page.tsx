@@ -48,6 +48,25 @@ function sortVal(r: Row, by: SortBy): number {
   return x.score?.score ?? -1;
 }
 
+// Client-side re-scoring so typing a cost updates profit / ROI / verdict INSTANTLY with no
+// server call (the comps are already known). Mirrors lib/scorer.ts scoreProduct with a flat
+// $8 shipping estimate (matches the store scanner). Returns null when there are no comps.
+const FEE_RATE = 0.1325, EST_SHIP = 8;
+function scoreClient(cost: number, comps: Comps): Score | null {
+  if (!comps.found || comps.count === 0 || comps.median === 0) return null;
+  const netRevenue = comps.median - comps.median * FEE_RATE - EST_SHIP;
+  const estimatedProfit = netRevenue - cost;
+  const roi = cost > 0 ? estimatedProfit / cost : 0;
+  const vol = Math.min(1, comps.count / 20);
+  let base: number;
+  if (roi >= 1) base = 90; else if (roi >= 0.75) base = 80; else if (roi >= 0.5) base = 70;
+  else if (roi >= 0.3) base = 57; else if (roi >= 0.2) base = 45; else if (roi >= 0.1) base = 32;
+  else if (roi >= 0) base = 18; else base = 5;
+  const score = Math.max(1, Math.min(100, Math.round(base * vol + 35 * (1 - vol))));
+  const grade = score >= 85 ? "S" : score >= 70 ? "A" : score >= 55 ? "B" : score >= 40 ? "C" : score >= 25 ? "D" : "F";
+  return { score, estimatedProfit, roi, netRevenue, grade, reason: "" };
+}
+
 const money = (n: number) => "$" + (n >= 100 ? Math.round(n) : n.toFixed(0));
 function ebayUrl(q: string) {
   const qs = new URLSearchParams({ _nkw: q, LH_Complete: "1", LH_Sold: "1", _sop: "13" });
@@ -75,8 +94,17 @@ export default function ScanPage() {
   const [mode, setMode] = useState<Mode>("store");
 
   async function logout() {
-    try { await fetch("/api/auth/logout", { method: "POST" }); } catch {}
-    window.location.href = "/login";
+    // Web build uses a session cookie (→ /login); the desktop build uses a local license
+    // file (→ /activate). /api/license/check reports which via `mode`, so one function fits both.
+    try {
+      const d = await (await fetch("/api/license/check")).json();
+      if (d.mode === "cookie") {
+        await fetch("/api/auth/logout", { method: "POST" });
+        window.location.href = "/login";
+        return;
+      }
+    } catch {}
+    window.location.href = "/activate";
   }
 
   return (
@@ -158,8 +186,23 @@ function StorePanel() {
     setBusy(false);
   }
 
+  // Cost handling: default = the store's scraped price; a global field overrides all, and
+  // each row can override individually. Re-scoring is client-side (instant, no server call).
+  const [globalCost, setGlobalCost] = useState("");
+  const [costs, setCosts] = useState<Record<string, string>>({});
+  const effCost = (r: Row): number => {
+    const per = parseFloat(costs[r.id] ?? ""); if (per > 0) return per;
+    const g = parseFloat(globalCost); if (g > 0) return g;
+    return r.result?.cost ?? r.cost ?? 0;
+  };
+  const scoredRows: Row[] = rows.map(r => {
+    if (r.status !== "done" || !r.result || !r.result.comps.found) return r;
+    const c = effCost(r);
+    return { ...r, sub: money(c), result: { ...r.result, cost: c, score: scoreClient(c, r.result.comps) } };
+  });
+
   const done = rows.filter(r => r.status === "done").length;
-  const buys = rows.filter(r => r.result?.outcome === "ok" && (r.result.score?.score ?? 0) >= 55);
+  const buys = scoredRows.filter(r => r.result?.outcome === "ok" && (r.result.score?.score ?? 0) >= 55);
   const upside = buys.reduce((s, r) => s + Math.max(0, r.result!.score!.estimatedProfit), 0);
 
   return (
@@ -175,8 +218,17 @@ function StorePanel() {
         <>
           <SummaryCard title="Store scan" done={done} total={rows.length} busy={busy} exhausted={exhausted}
             stat1={{ n: String(buys.length), label: "to buy", color: GREEN }} stat2={{ n: money(upside), label: "est. profit", color: FG }} note={note} />
-          <RowList rows={rows} buyWord="BUY" showImage expanded={expanded} setExpanded={setExpanded}
-            onRecheck={(row) => scanOne(row)} />
+          {/* Your cost — applies to every product (default is the store's price). Per-row
+              override lives in each card's detail. Profit/ROI recompute instantly. */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+            <input value={globalCost} onChange={e => setGlobalCost(e.target.value)} placeholder="Your cost $ — applies to all (optional)" style={{ ...inp, flex: 1 }} inputMode="decimal" />
+            {(globalCost || Object.keys(costs).length > 0) && (
+              <button onClick={() => { setGlobalCost(""); setCosts({}); }} style={{ ...btnSecondary, whiteSpace: "nowrap" }}>Reset</button>
+            )}
+          </div>
+          <div style={{ fontSize: 11, color: MUTED, marginBottom: 10 }}>Default cost = the store’s price. Enter your real buy cost to see true profit.</div>
+          <RowList rows={scoredRows} buyWord="BUY" showImage expanded={expanded} setExpanded={setExpanded}
+            onRecheck={(row) => scanOne(row)} costs={costs} onCostChange={(id, val) => setCosts(prev => ({ ...prev, [id]: val }))} />
         </>
       )}
     </div>
@@ -295,7 +347,7 @@ function SummaryCard(props: { title: string; subtitle?: string; done: number; to
   );
 }
 
-function RowList({ rows, buyWord, showImage, expanded, setExpanded, onRecheck }: { rows: Row[]; buyWord: string; showImage?: boolean; expanded: string | null; setExpanded: (s: string | null) => void; onRecheck: (row: Row) => void }) {
+function RowList({ rows, buyWord, showImage, expanded, setExpanded, onRecheck, costs, onCostChange }: { rows: Row[]; buyWord: string; showImage?: boolean; expanded: string | null; setExpanded: (s: string | null) => void; onRecheck: (row: Row) => void; costs?: Record<string, string>; onCostChange?: (id: string, val: string) => void }) {
   const [sortBy, setSortBy] = useState<SortBy>("best");
   const [cat, setCat] = useState<string | null>(null);
   const [winnersOnly, setWinnersOnly] = useState(false);
@@ -401,7 +453,13 @@ function RowList({ rows, buyWord, showImage, expanded, setExpanded, onRecheck }:
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px" }}>
                     <Detail k="Sold range" v={`${money(p.comps.low)} – ${money(p.comps.high)}`} />
                     <Detail k="~ sold / mo" v={String(p.comps.avgSoldPerMonth)} />
-                    {p.cost > 0 && <Detail k="Your cost" v={money(p.cost)} />}
+                    {onCostChange ? (
+                      <div>
+                        <div style={{ fontSize: 11, color: MUTED }}>Your cost</div>
+                        <input value={costs?.[row.id] ?? String(p.cost || "")} onChange={e => onCostChange(row.id, e.target.value)} onClick={e => e.stopPropagation()} inputMode="decimal" placeholder="$"
+                          style={{ width: "100%", marginTop: 2, background: "#081820", border: `1px solid ${BORDER}`, borderRadius: 7, color: FG, padding: "6px 8px", fontSize: 14, fontWeight: 600, fontFamily: MONO, outline: "none" }} />
+                      </div>
+                    ) : (p.cost > 0 && <Detail k="Your cost" v={money(p.cost)} />)}
                     {p.score && <Detail k="Net after fees" v={money(p.score.netRevenue)} />}
                     {p.score && p.cost > 0 && <Detail k="Est. profit" v={money(p.score.estimatedProfit)} />}
                   </div>
