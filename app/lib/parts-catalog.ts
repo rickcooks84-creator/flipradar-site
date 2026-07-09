@@ -45,6 +45,11 @@ export interface PartDef {
   category: PartCategory;
   ship: ShipClass;
   pull?: number;            // override PULL_COST_BY_SHIP for this part
+  minPrice?: number;        // drop comps below this $ (floors out cheap accessory noise on
+                            // generic-keyword assemblies — a real transmission is never $30)
+  exclude?: string[];       // drop a comp whose title contains any of these words (whole-word)
+                            // — kills wrong-component collisions a single keyword can't (e.g.
+                            // "door" → door HANDLE/PANEL, "wheel hub" → RIM/TIRE sets)
   appliesTo?: (v: { turbo?: boolean; bodyClass?: string; drive?: string }) => boolean;
   note?: string;
 }
@@ -93,17 +98,17 @@ export const PARTS_CATALOG: PartDef[] = [
   { id: 'coils',      label: 'Ignition coils',      term: 'ignition coil',     mustMatch: ['coil'],                  category: 'engine', ship: 'small', fit: 'crossfit' },
   { id: 'fuelpump',   label: 'Fuel pump',           term: 'fuel pump',         mustMatch: ['fuel'],                  category: 'fuel', ship: 'small', fit: 'crossfit' },
   { id: 'injectors',  label: 'Fuel injectors (set)',term: 'fuel injectors set',mustMatch: ['injector'],              category: 'fuel', ship: 'small', fit: 'crossfit' },
-  { id: 'intake',     label: 'Intake manifold',     term: 'intake manifold',   mustMatch: ['intake', 'manifold'],    category: 'engine', ship: 'medium', fit: 'crossfit' },
+  { id: 'intake',     label: 'Intake manifold',     term: 'intake manifold',   mustMatch: ['intake', 'manifold'],    category: 'engine', ship: 'medium', fit: 'crossfit', minPrice: 50, exclude: ['gasket', 'sensor', 'runner', 'flap', 'actuator', 'bolt', 'kit', 'boot', 'hose', 'clamp', 'tube', 'seal'] },
   { id: 'exmanifold', label: 'Exhaust manifold / header', term: 'exhaust manifold header', mustMatch: ['manifold', 'header'], category: 'exhaust', ship: 'medium', fit: 'crossfit' },
   { id: 'turbo',      label: 'Turbocharger',        term: 'turbo turbocharger', mustMatch: ['turbo'],                category: 'engine', ship: 'medium', fit: 'crossfit',
     appliesTo: v => !!v.turbo, note: 'High value — only on turbo/forced-induction engines.' },
 
   // ── Big-ticket assemblies (freight / local pickup; high value) ──
-  { id: 'engine',     label: 'Engine / long block', term: 'engine motor assembly', mustMatch: ['engine', 'motor'],  category: 'engine', ship: 'freight', fit: 'crossfit', pull: 250, note: 'Match displacement + VIN engine code. Verify mileage; freight/local pickup.' },
-  { id: 'transmission', label: 'Transmission (assembly)', term: 'transmission', mustMatch: ['transmission', 'trans'], category: 'drivetrain', ship: 'freight', fit: 'crossfit', pull: 200, note: 'Match engine + trans code. Freight/local pickup.' },
-  { id: 'transfercase', label: 'Transfer case',     term: 'transfer case',     mustMatch: ['transfer'],              category: 'drivetrain', ship: 'large', fit: 'crossfit', pull: 90, appliesTo: has4wd, note: 'Only on 4WD/AWD vehicles.' },
-  { id: 'driveshaft', label: 'Driveshaft',          term: 'driveshaft drive shaft', mustMatch: ['driveshaft'],       category: 'drivetrain', ship: 'large', fit: 'crossfit', appliesTo: notFwd },
-  { id: 'differential', label: 'Differential / rear end', term: 'differential rear carrier', mustMatch: ['differential', 'carrier'], category: 'drivetrain', ship: 'freight', fit: 'crossfit', pull: 120, appliesTo: notFwd, note: 'Rear axle assembly. Freight/local pickup.' },
+  { id: 'engine',     label: 'Engine / long block', term: 'engine motor assembly', mustMatch: ['engine', 'motor'],  category: 'engine', ship: 'freight', fit: 'crossfit', pull: 250, minPrice: 250, exclude: ['mount', 'mounts', 'harness', 'wiring', 'cover', 'wiper', 'blower', 'washer', 'sensor', 'bracket'], note: 'Match displacement + VIN engine code. Verify mileage; freight/local pickup.' },
+  { id: 'transmission', label: 'Transmission (assembly)', term: 'transmission', mustMatch: ['transmission', 'trans'], category: 'drivetrain', ship: 'freight', fit: 'crossfit', pull: 200, minPrice: 250, exclude: ['mount', 'mounts', 'cooler', 'filter', 'pan', 'sensor', 'solenoid', 'gasket', 'module', 'wire', 'wiring', 'harness', 'line', 'lines', 'dipstick', 'switch', 'seal', 'fluid', 'bracket', 'kit'], note: 'Match engine + trans code. Freight/local pickup.' },
+  { id: 'transfercase', label: 'Transfer case',     term: 'transfer case',     mustMatch: ['transfer'],              category: 'drivetrain', ship: 'large', fit: 'crossfit', pull: 90, minPrice: 120, exclude: ['motor', 'sensor', 'switch', 'actuator', 'seal', 'gasket', 'chain', 'bearing', 'mount', 'solenoid'], appliesTo: has4wd, note: 'Only on 4WD/AWD vehicles.' },
+  { id: 'driveshaft', label: 'Driveshaft',          term: 'driveshaft drive shaft', mustMatch: ['driveshaft'],       category: 'drivetrain', ship: 'large', fit: 'crossfit', minPrice: 60, exclude: ['joint', 'ujoint', 'yoke', 'bearing', 'boot', 'flange', 'seal', 'center', 'carrier', 'coupler'], appliesTo: notFwd },
+  { id: 'differential', label: 'Differential / rear end', term: 'differential rear carrier', mustMatch: ['differential', 'carrier'], category: 'drivetrain', ship: 'freight', fit: 'crossfit', pull: 120, minPrice: 150, exclude: ['cover', 'bearing', 'seal', 'gasket', 'mount', 'bushing', 'fluid', 'kit', 'yoke', 'shim'], appliesTo: notFwd, note: 'Rear axle assembly. Freight/local pickup.' },
   { id: 'cvaxle',     label: 'CV axle / half shaft',term: 'cv axle half shaft', mustMatch: ['axle', 'halfshaft'],     category: 'drivetrain', ship: 'medium', fit: 'crossfit' },
 
   // ── Cooling / HVAC ──
@@ -120,7 +125,7 @@ export const PARTS_CATALOG: PartDef[] = [
   // ── Suspension / steering ──
   { id: 'strut',      label: 'Struts / shocks',     term: 'strut shock absorber', mustMatch: ['strut', 'shock'],     category: 'suspension', ship: 'medium', fit: 'crossfit' },
   { id: 'controlarm', label: 'Control arm',         term: 'control arm',       mustMatch: ['arm'],                   category: 'suspension', ship: 'medium', fit: 'crossfit' },
-  { id: 'wheelhub',   label: 'Wheel hub / bearing', term: 'wheel hub bearing assembly', mustMatch: ['hub'],          category: 'suspension', ship: 'small', fit: 'crossfit' },
+  { id: 'wheelhub',   label: 'Wheel hub / bearing', term: 'wheel hub bearing assembly', mustMatch: ['hub'],          category: 'suspension', ship: 'small', fit: 'crossfit', exclude: ['pair', 'set', '2x', '2pc', '2pcs', '2pcs', 'both', 'kit', 'control', 'arm', 'arms', 'cv', 'axle', 'spacer', 'spacers', 'rim', 'rims', 'hubcap'], note: 'eBay comps skew to NEW pairs — a used single pulls less.' },
   { id: 'steeringrack', label: 'Steering rack / gearbox', term: 'steering rack gearbox', mustMatch: ['rack', 'gearbox'], category: 'suspension', ship: 'large', fit: 'crossfit' },
   { id: 'steeringcol',  label: 'Steering column',   term: 'steering column',   mustMatch: ['column'],                category: 'interior', ship: 'medium' },
 
@@ -160,11 +165,11 @@ export const PARTS_CATALOG: PartDef[] = [
 
   // ── Body panels (valuable but freight-shipped; model-specific) ──
   { id: 'grille',     label: 'Front grille',        term: 'grille',            mustMatch: ['grille'],                category: 'body', ship: 'medium' },
-  { id: 'fender',     label: 'Fender',              term: 'fender',            mustMatch: ['fender'],                category: 'body', ship: 'large' },
-  { id: 'hood',       label: 'Hood',                term: 'hood',              mustMatch: ['hood'],                  category: 'body', ship: 'freight' },
-  { id: 'bumper',     label: 'Bumper cover',        term: 'bumper cover',      mustMatch: ['bumper'],                category: 'body', ship: 'large' },
-  { id: 'tailgate',   label: 'Tailgate / trunk lid',term: 'tailgate trunk lid liftgate', mustMatch: ['tailgate', 'trunk', 'liftgate', 'lid'], category: 'body', ship: 'freight' },
-  { id: 'door',       label: 'Door shell (complete)', term: 'door shell',      mustMatch: ['door'],                  category: 'body', ship: 'freight', note: 'Complete door; freight/local pickup.' },
+  { id: 'fender',     label: 'Fender',              term: 'fender',            mustMatch: ['fender'],                category: 'body', ship: 'large', minPrice: 45, exclude: ['liner', 'flare', 'flares', 'trim', 'molding', 'emblem', 'badge', 'marker', 'light', 'sensor', 'bracket', 'well', 'splash', 'guard', 'extension', 'decal', 'sticker', 'protector', 'vent', 'clip'] },
+  { id: 'hood',       label: 'Hood',                term: 'hood',              mustMatch: ['hood'],                  category: 'body', ship: 'freight', minPrice: 90, exclude: ['strut', 'struts', 'latch', 'hinge', 'emblem', 'ornament', 'insulation', 'insulator', 'liner', 'pad', 'scoop', 'vent', 'deflector', 'protector', 'bra', 'release', 'cable', 'prop', 'sensor', 'molding', 'decal', 'sticker'] },
+  { id: 'bumper',     label: 'Bumper cover',        term: 'bumper cover',      mustMatch: ['bumper'],                category: 'body', ship: 'large', minPrice: 60, exclude: ['bracket', 'support', 'absorber', 'reinforcement', 'sensor', 'trim', 'molding', 'guard', 'pad', 'emblem', 'license', 'plate', 'clip', 'retainer', 'filler', 'valance', 'lip', 'protector', 'skid'] },
+  { id: 'tailgate',   label: 'Tailgate / trunk lid',term: 'tailgate trunk lid liftgate', mustMatch: ['tailgate', 'trunk', 'liftgate', 'lid'], category: 'body', ship: 'freight', minPrice: 80, exclude: ['handle', 'latch', 'cap', 'emblem', 'molding', 'trim', 'cable', 'strut', 'hinge', 'lock', 'actuator', 'protector', 'net', 'step', 'assist', 'sensor', 'camera', 'light', 'lens', 'decal', 'sticker', 'bezel', 'panel'] },
+  { id: 'door',       label: 'Door shell (complete)', term: 'door shell',      mustMatch: ['door'],                  category: 'body', ship: 'freight', minPrice: 90, exclude: ['handle', 'panel', 'molding', 'trim', 'switch', 'speaker', 'emblem', 'sticker', 'decal', 'guard', 'protector', 'sill', 'armrest', 'striker', 'weatherstrip', 'latch', 'hinge', 'actuator', 'lock', 'bezel', 'clip', 'reflector'], note: 'Complete door; freight/local pickup.' },
   { id: 'doorpanel',  label: 'Door panel (interior)', term: 'door panel interior trim', mustMatch: ['panel'],        category: 'interior', ship: 'large' },
   { id: 'spoiler',    label: 'Spoiler / wing',      term: 'spoiler wing',      mustMatch: ['spoiler', 'wing'],       category: 'body', ship: 'medium' },
   { id: 'runningboard', label: 'Running boards / steps', term: 'running board side step', mustMatch: ['running', 'step', 'board'], category: 'body', ship: 'freight', appliesTo: isTruckSuvVan },

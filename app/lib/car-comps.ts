@@ -123,6 +123,7 @@ function isRelevantCarComp(
   v: Pick<Vehicle, 'year' | 'make' | 'model'>,
   mustMatch: string[],
   fit: PartFit = 'model',
+  exclude: string[] = [],
 ): boolean {
   const t = title.toLowerCase();
   const collapsed = collapse(t);
@@ -130,6 +131,12 @@ function isRelevantCarComp(
 
   // 1) Part identity — the listing must actually be this part.
   if (!mustMatch.some(m => tokens.has(m) || collapsed.includes(m))) return false;
+
+  // 1b) Wrong-component guard — a generic keyword ("door", "transmission") also matches the
+  // cheap accessories that share it (a door HANDLE, a transmission COOLER). Those drag the
+  // median down and mis-score a valuable assembly as SKIP. Drop any comp whose title names an
+  // excluded component (whole-word match, so "cap" won't trip on "capacity").
+  if (exclude.length && exclude.some(x => tokens.has(x))) return false;
 
   // 2) Vehicle fit — model-strict, or make-level for cross-fit parts.
   if (!fitMatches(collapsed, tokens, v, fit)) return false;
@@ -166,8 +173,11 @@ export async function getCarPartComps(
 
   if (res.status !== 'ok') return { status: res.status, comps: EMPTY, parsed: res.items.length };
 
-  const relevant: EbayItem[] = res.items.filter(it => isRelevantCarComp(it.title, v, part.mustMatch, part.fit ?? 'model'));
-  const prices = relevant.map(i => i.price).filter(p => p > 0);
+  const relevant: EbayItem[] = res.items.filter(it => isRelevantCarComp(it.title, v, part.mustMatch, part.fit ?? 'model', part.exclude));
+  // Floor out sub-assembly noise (see PartDef.minPrice): a real transmission/engine/door is
+  // never $30, so a price below the floor is an accessory that slipped past the word filters.
+  const floor = part.minPrice ?? 0;
+  const prices = relevant.map(i => i.price).filter(p => p > 0 && p >= floor);
   if (!prices.length) return { status: 'empty', comps: EMPTY, parsed: res.items.length };
 
   return { status: 'ok', comps: calcComps(prices, res.items.length), parsed: res.items.length };
