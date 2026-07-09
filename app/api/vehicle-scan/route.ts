@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
   let keysExhausted = false;
 
   const results = await runPool<PartDef, PartResult>(parts, 8, async (part) => {
-    const cost = globalCost ?? PULL_COST_BY_SHIP[part.ship];
+    const cost = globalCost ?? part.pull ?? PULL_COST_BY_SHIP[part.ship];
     const shipping = SHIP_COST_BY_CLASS[part.ship];
     const query = carPartQuery(vehicle, part);
 
