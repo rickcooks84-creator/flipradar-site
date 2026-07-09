@@ -425,10 +425,79 @@ async function searchOnce(keywords: string, queryTokens: string[], timeoutMs: nu
 // stops BEFORE relevance filtering and passes `keywords` verbatim into _nkw (year intact).
 export interface SoldItemsResult { status: FetchStatus; items: EbayItem[]; }
 
-// The uncached fetch: exactly ONE ScraperAPI request → parsed (title, price) items.
+// ─── eBay Browse API (official, free) — PREFERRED comp source when creds are set ──────
+//
+// When EBAY_CLIENT_ID/SECRET are present we fetch comps from eBay's OWN Browse API instead
+// of scraping sold pages through ScraperAPI — no proxy, no ScraperAPI credits, 5k calls/day
+// free per app. IMPORTANT TRADE-OFF: Browse returns ACTIVE listings (current asking prices),
+// not SOLD prices — eBay's accurate sold endpoint (Marketplace Insights) needs a separate
+// grant this app doesn't have (verified: buy.marketplace.insights → invalid_scope). Asking
+// prices run above sold, so we scale each price by EBAY_ACTIVE_TO_SOLD (default 0.8, tunable)
+// to approximate the sold value. Downstream relevance (car-comps / relevantPrices) is
+// unchanged — it still filters these items by title. All of this stays behind the same
+// cache, so repeat queries are still free.
+const EBAY_CID = process.env.EBAY_CLIENT_ID || '';
+const EBAY_SECRET = process.env.EBAY_CLIENT_SECRET || '';
+const EBAY_ENABLED = !!(EBAY_CID && EBAY_SECRET);
+const ACTIVE_TO_SOLD = Math.max(0.1, Math.min(1, parseFloat(process.env.EBAY_ACTIVE_TO_SOLD || '0.8') || 0.8));
+
+// Cache the app OAuth token in-process (client_credentials tokens last ~2h).
+let ebayToken: { value: string; exp: number } | null = null;
+async function ebayAppToken(): Promise<string | null> {
+  if (ebayToken && Date.now() < ebayToken.exp) return ebayToken.value;
+  const basic = Buffer.from(`${EBAY_CID}:${EBAY_SECRET}`).toString('base64');
+  try {
+    const res = await fetch('https://api.ebay.com/identity/v1/oauth2/token', {
+      method: 'POST',
+      headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=client_credentials&scope=' + encodeURIComponent('https://api.ebay.com/oauth/api_scope'),
+    });
+    if (!res.ok) return null;
+    const j: any = await res.json();
+    if (!j.access_token) return null;
+    ebayToken = { value: j.access_token, exp: Date.now() + ((j.expires_in ? j.expires_in - 60 : 6600) * 1000) };
+    return ebayToken.value;
+  } catch { return null; }
+}
+
+async function fetchBrowseItems(keywords: string, timeoutMs: number): Promise<SoldItemsResult> {
+  const tok = await ebayAppToken();
+  if (!tok) return { status: 'error', items: [] };
+  const url = 'https://api.ebay.com/buy/browse/v1/item_summary/search'
+    + '?limit=100&filter=' + encodeURIComponent('buyingOptions:{FIXED_PRICE}')
+    + '&q=' + encodeURIComponent(keywords);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${tok}`, 'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US' },
+      signal: controller.signal,
+    });
+    if (res.status === 401) { ebayToken = null; return { status: 'throttled', items: [] }; } // stale token → retry
+    if (res.status === 429) return { status: 'throttled', items: [] };                          // rate cap → back off
+    if (!res.ok) return { status: 'error', items: [] };
+    const j: any = await res.json();
+    const items: EbayItem[] = (j.itemSummaries || [])
+      .map((it: any) => {
+        const p = parseFloat(it?.price?.value);
+        return { title: String(it?.title || ''), price: p > 0 ? Math.round(p * ACTIVE_TO_SOLD * 100) / 100 : 0 };
+      })
+      .filter((it: EbayItem) => it.price >= 1 && it.price < 5000);
+    return { status: items.length ? 'ok' : 'empty', items };
+  } catch {
+    return { status: 'error', items: [] }; // timeout / network → retryable
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// The uncached fetch: exactly ONE upstream request → parsed (title, price) items.
+// Prefers eBay's official Browse API when creds are set; otherwise scrapes via ScraperAPI.
 async function fetchSoldItemsUncached(keywords: string, timeoutMs: number): Promise<SoldItemsResult> {
   const kw = (keywords || '').trim();
   if (!kw) return { status: 'empty', items: [] };
+
+  if (EBAY_ENABLED) return fetchBrowseItems(kw, timeoutMs);
 
   const raw = await fetchRaw(buildSearchUrl(kw), timeoutMs);
   if (!raw) return { status: 'error', items: [] };
@@ -461,7 +530,7 @@ const cachedItems = unstable_cache(
     if (res.status !== 'ok' || !res.items.length) throw new Error('NOCACHE:' + res.status);
     return res.items;
   },
-  ['ebay-sold-items-v1'],
+  ['ebay-sold-items-v2'], // v2: source switched to eBay Browse API (was ScraperAPI sold pages)
   { revalidate: COMP_CACHE_TTL, tags: ['ebay-comps'] },
 );
 
