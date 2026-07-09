@@ -5,8 +5,8 @@ import { scrapeProducts } from '@/app/lib/scraper';
 // comps. The client then fetches comps one product per request via /api/comp, so this stays
 // a single quick call and the whole flow fits any Vercel plan's function limit. Pages are
 // capped so the scrape returns fast; the product list is capped to keep the comp sweep sane.
-const MAX_PAGES = 3;
-const MAX_PRODUCTS = 100;
+const MAX_PAGES = 4;      // Shopify returns 250/page → up to 1000 fetched; keeps scrape < ~5s
+const MAX_PRODUCTS = 500; // matches the "500+ products per scan" promise (was 100)
 
 export async function POST(req: NextRequest) {
   const { url } = (await req.json().catch(() => ({}))) as { url?: string };

@@ -365,7 +365,15 @@ function RowList({ rows, buyWord, showImage, expanded, setExpanded, onRecheck, c
   // Visible list: apply category + winners-only filters, then sort.
   let view = rows.filter(r => !activeCat || r.category === activeCat);
   if (winnersOnly) view = view.filter(r => { const t = tier(r); return t === "pull" || t === "maybe" || t === "pending" || t === "recheck"; });
-  view = [...view].sort((a, b) => sortVal(b, sortBy) - sortVal(a, sortBy));
+  view = [...view].sort((a, b) => {
+    const d = sortVal(b, sortBy) - sortVal(a, sortBy);
+    if (d !== 0) return d;
+    // Tie-break by profit, then median — so "Best" surfaces the MOST PROFITABLE among items
+    // that share the same score (e.g. everything scoring 90 after a global cost is entered).
+    const pa = a.result?.score?.estimatedProfit ?? -Infinity, pb = b.result?.score?.estimatedProfit ?? -Infinity;
+    if (pb !== pa) return pb - pa;
+    return (b.result?.comps.median ?? -1) - (a.result?.comps.median ?? -1);
+  });
   const hiddenCount = rows.length - view.length;
 
   const SORTS: [SortBy, string][] = [["best", "Best"], ["median", "$ Median"], ["profit", "Profit"], ["sold", "Sold"]];
