@@ -163,10 +163,31 @@ function isThrottlePage(html: string, $: Cheerio$): boolean {
   return false;
 }
 
+// When a search has FEW or NO exact matches, eBay pads the page with a
+// "Results matching fewer words" / "No exact matches found" section of FUZZY filler —
+// different brands and generic same-category items. A search for an LGNDRY "Lana" long
+// sleeve crop top with ZERO exact sold matches gets padded with random $8 Gymshark /
+// Free People crop tops; counting those as comps invents a whole fake sold history
+// (fake median, fake "52 sold", fake ROI) for a product that has no eBay resale market.
+// This filler must NEVER be treated as sold comps.
+//
+// eBay renders that divider as a section HEADING *between* result cards (a
+// `section-notice__main` span), NOT inside an `<li.s-card>`, so the per-card text check
+// in parseItems never sees it and every filler card after it gets scraped. Real exact
+// matches are always rendered BEFORE the divider, so we cut the HTML at the first divider
+// marker before parsing: good queries (no divider) keep every card unchanged; zero/low-
+// match queries drop all the filler. Verified on live eBay — bad query → 0 comps (correct),
+// 62-match query has no divider → all kept (no regression).
+const FUZZY_DIVIDER = /No exact matches found|Results matching fewer words|Results that closely match|matching fewer words/i;
+function stripFuzzyFiller(html: string): string {
+  const m = FUZZY_DIVIDER.exec(html);
+  return m ? html.slice(0, m.index) : html;
+}
+
 // Pull (title, price) pairs from the sold-results HTML. eBay migrated cards from
-// 'li.s-item' → 'li.s-card'; we accept both. We stop at the "fewer words / closely
-// match" divider (everything past it is fuzzy filler) and skip the "Shop on eBay"
-// promo placeholder card.
+// 'li.s-item' → 'li.s-card'; we accept both. The caller passes HTML already truncated at
+// the fuzzy-match divider (see stripFuzzyFiller); we additionally break on the divider
+// per-card as defense-in-depth, and skip the "Shop on eBay" promo placeholder card.
 function parseItems(html: string, $: Cheerio$): EbayItem[] {
 
   const items: EbayItem[] = [];
@@ -512,7 +533,9 @@ async function fetchSoldItemsUncached(keywords: string, timeoutMs: number): Prom
   const $ = cheerio.load(raw.html);
   if (isThrottlePage(raw.html, $)) return { status: 'throttled', items: [] };
 
-  const items = parseItems(raw.html, $);
+  // Parse ONLY the exact-match region — drop eBay's "fewer words" fuzzy filler so we never
+  // fabricate comps for a product that has no real sold history (see stripFuzzyFiller).
+  const items = parseItems(raw.html, cheerio.load(stripFuzzyFiller(raw.html)));
   return { status: items.length ? 'ok' : 'empty', items };
 }
 
@@ -534,7 +557,7 @@ const cachedItems = unstable_cache(
     if (res.status !== 'ok' || !res.items.length) throw new Error('NOCACHE:' + res.status);
     return res.items;
   },
-  ['ebay-sold-items-v3'], // v3: back to SOLD data (ScraperAPI sold pages / Marketplace Insights); v2 held active-listing data — never serve it as sold
+  ['ebay-sold-items-v4'], // v4: drop eBay "fewer words" fuzzy filler (was fabricating comps for no-market items); v3 SOLD data; v2 held active-listing data — never serve it as sold
   { revalidate: COMP_CACHE_TTL, tags: ['ebay-comps'] },
 );
 
