@@ -99,8 +99,66 @@ function isCreditExhausted(status: number, body: string): boolean {
   return /credit|exceeded the .* limit|out of .* requests|payment required/i.test(body.slice(0, 500));
 }
 
+// ─── Desktop (Electron) fetch bridge — FREE, no ScraperAPI ────────────────────
+//
+// On the DESKTOP build the Next server runs as a child process forked by Electron
+// (electron/main.cjs). Rather than spend ScraperAPI credits, we fetch eBay's sold HTML for
+// FREE through the Electron main process: it holds a dedicated ANONYMOUS eBay partition
+// (guest cookies only — NEVER the user's account) plus a Chromium net.request, and answers
+// {type:'ebay-search'} messages over the fork IPC channel (see processEbaySearch/
+// fetchEbayHtml in main.cjs — already shipping). This keeps every desktop user off our
+// ScraperAPI budget entirely. The WEB build has no Electron parent (process.send is
+// undefined and the flag is unset), so it stays on the ScraperAPI path below — the SAME
+// file drives both, gated purely by env, so web + desktop ebay.ts remain byte-identical.
+const IS_DESKTOP = process.env.FLIPSONAR_DESKTOP === '1' && typeof process.send === 'function';
+
+const ipcPending = new Map<number, (v: RawResponse | null) => void>();
+let ipcSeq = 0;
+let ipcReady = false;
+function ensureIpcListener(): void {
+  if (ipcReady) return;
+  ipcReady = true;
+  // Electron main replies with { id, data: { status, ok, html } | null }; match it to the
+  // pending request by id and ignore anything else on the channel.
+  process.on('message', (msg: any) => {
+    const resolve = msg && typeof msg.id === 'number' ? ipcPending.get(msg.id) : undefined;
+    if (!resolve) return;
+    const d = msg.data;
+    resolve(d ? { status: d.status, ok: !!d.ok, html: d.html || '' } : null);
+  });
+}
+
+// Ask Electron main to fetch one eBay URL; returns the same {status, ok, html} | null shape
+// as the ScraperAPI fetchRaw so the rest of the pipeline is unchanged. The safety timeout is
+// generous because main warms up eBay's guest cookies on the FIRST request (one-time), which
+// can take several seconds before the fetch itself runs.
+function fetchViaElectron(targetUrl: string, timeoutMs: number): Promise<RawResponse | null> {
+  ensureIpcListener();
+  return new Promise((resolve) => {
+    const id = ++ipcSeq;
+    let done = false;
+    const finish = (v: RawResponse | null) => {
+      if (done) return;
+      done = true;
+      ipcPending.delete(id);
+      clearTimeout(timer);
+      resolve(v);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs + 12000);
+    ipcPending.set(id, finish);
+    try {
+      (process.send as (m: any) => void)({ type: 'ebay-search', id, url: targetUrl, timeoutMs });
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+if (IS_DESKTOP) console.log('[ebay] comp engine = Electron (desktop) — free, no ScraperAPI');
+
 function fetchRaw(targetUrl: string, timeoutMs: number): Promise<RawResponse | null> {
   if (isStopSignaled()) return Promise.resolve(null);
+  if (IS_DESKTOP) return fetchViaElectron(targetUrl, timeoutMs); // desktop: free, from the user's machine
   if (allKeysExhausted()) return Promise.resolve({ status: 402, ok: false, html: 'all-keys-exhausted' });
 
   const ks = acquireKey();
@@ -184,14 +242,21 @@ function stripFuzzyFiller(html: string): string {
   return m ? html.slice(0, m.index) : html;
 }
 
-// Pull (title, price) pairs from the sold-results HTML. eBay migrated cards from
-// 'li.s-item' → 'li.s-card'; we accept both. The caller passes HTML already truncated at
-// the fuzzy-match divider (see stripFuzzyFiller); we additionally break on the divider
-// per-card as defense-in-depth, and skip the "Shop on eBay" promo placeholder card.
+// Pull (title, price) pairs from the sold-results HTML. eBay serves THREE card layouts
+// depending on the session/rollout, and we must handle all of them or comps silently go to
+// zero when eBay flips a layout:
+//   • legacy  <li class="s-item">          (title .s-item__title, price .s-item__price)
+//   • interim <li class="s-card">          (title .s-card__title,  price .s-card__price)
+//   • newer   <div class="su-card-container"> (title .su-item-card__title, price .su-item-card__price)
+// The anonymous Electron/desktop session tends to get the NEW su-card layout; ScraperAPI
+// tends to get the legacy one — but eBay A/B-tests these, so we parse whichever appears.
+// The caller passes HTML already truncated at the fuzzy-match divider (see stripFuzzyFiller);
+// we additionally break on the divider per-card as defense-in-depth, and skip the "Shop on
+// eBay" promo placeholder card.
 function parseItems(html: string, $: Cheerio$): EbayItem[] {
 
   const items: EbayItem[] = [];
-  const cards = $('li.s-card, li.s-item');
+  const cards = $('li.s-card, li.s-item, .su-card-container');
 
   cards.each((_, el) => {
     const $el = $(el);
@@ -200,14 +265,14 @@ function parseItems(html: string, $: Cheerio$): EbayItem[] {
       return false; // break: stop at the relevance divider
     }
     const title = (
-      $el.find('.s-card__title, .s-item__title').first().text() ||
+      $el.find('.s-card__title, .s-item__title, .su-item-card__title').first().text() ||
       $el.find('[class*="title"]').first().text() ||
       ''
     ).trim();
     if (!title || /Shop on eBay/i.test(title)) return;
 
     const priceText = (
-      $el.find('.s-card__price, .s-item__price').first().text() ||
+      $el.find('.s-card__price, .s-item__price, .su-item-card__price').first().text() ||
       $el.find('[class*="price"]').first().text() ||
       ''
     ).trim();
