@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useRef } from "react";
 
 // ─── FlipSonar green/navy theme ───────────────────────────────────────────────
 const BG = "#07111a", SURFACE = "#0d1e2b", BORDER = "#1a3a2e", MUTED = "#5a8a78";
@@ -83,10 +83,10 @@ function verdict(row: Row, buyWord: string): { label: string; color: string; bg:
   if (s >= 40) return { label: "MAYBE", color: AMBER, bg: "#231a05" };
   return { label: "SKIP", color: RED, bg: "#230d0d" };
 }
-async function runPool<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>) {
+async function runPool<T>(items: T[], concurrency: number, worker: (item: T) => Promise<void>, shouldStop?: () => boolean) {
   let i = 0;
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (i < items.length) { const it = items[i++]; await worker(it); }
+    while (i < items.length) { if (shouldStop?.()) return; const it = items[i++]; await worker(it); }
   }));
 }
 
@@ -153,6 +153,9 @@ function StorePanel() {
   const [note, setNote] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
+  const stopRef = useRef(false);
+
+  function stop() { stopRef.current = true; setBusy(false); }
 
   async function scanOne(row: Row) {
     setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: "busy" } : r));
@@ -169,18 +172,19 @@ function StorePanel() {
   async function scan() {
     setError(""); setNote(""); setRows([]); setExpanded(null); setExhausted(false);
     if (!/^https?:\/\//i.test(url.trim())) { setError("Enter a full store URL starting with https://"); return; }
-    setBusy(true);
+    stopRef.current = false; setBusy(true);
     try {
       const r = await fetch("/api/store-scrape", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: url.trim() }) });
       const d = await r.json();
       if (d.error) { setError(d.error); setBusy(false); return; }
+      if (stopRef.current) { setBusy(false); return; }
       if (d.capped) setNote(`Showing the first ${d.products.length} of ${d.total} products.`);
       const initial: Row[] = d.products.map((p: any) => ({
         id: p.id, label: p.name, sub: p.price ? money(p.price) : "no price", imageUrl: p.imageUrl, productUrl: p.productUrl,
         query: p.ebayQuery, cost: p.price ?? 0, status: "pending" as const,
       }));
       setRows(initial);
-      await runPool(initial, 6, scanOne);
+      await runPool(initial, 6, scanOne, () => stopRef.current);
       setRows(prev => [...prev].sort((a, b) => (b.result?.score?.score ?? -1) - (a.result?.score?.score ?? -1)));
     } catch { setError("Scan failed — check the URL and your connection."); }
     setBusy(false);
@@ -209,7 +213,7 @@ function StorePanel() {
     <div style={{ padding: 16, position: "relative", zIndex: 1 }}>
       <div style={{ display: "flex", gap: 8 }}>
         <input value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => { if (e.key === "Enter") scan(); }} placeholder="Paste a store or collection URL" style={inp} inputMode="url" autoCapitalize="none" spellCheck={false} />
-        <button onClick={scan} disabled={busy} style={{ ...btnPrimary, minWidth: 96, opacity: busy ? 0.6 : 1 }}>{busy ? "…" : "Scan"}</button>
+        <button onClick={busy ? stop : scan} style={busy ? { ...btnStop, minWidth: 96 } : { ...btnPrimary, minWidth: 96 }}>{busy ? "◼ Stop" : "Scan"}</button>
       </div>
       <div style={{ fontSize: 11, color: MUTED, marginTop: 8 }}>Works best on Shopify stores. Point at a collection/category page, not the homepage.</div>
       {error && <div style={errBox}>{error}</div>}
@@ -227,7 +231,7 @@ function StorePanel() {
             )}
           </div>
           <div style={{ fontSize: 11, color: MUTED, marginBottom: 10 }}>Default cost = the store’s price. Enter your real buy cost to see true profit.</div>
-          <RowList rows={scoredRows} buyWord="BUY" showImage expanded={expanded} setExpanded={setExpanded}
+          <RowList rows={scoredRows} buyWord="BUY" showImage scanning={busy} expanded={expanded} setExpanded={setExpanded}
             onRecheck={(row) => scanOne(row)} costs={costs} onCostChange={(id, val) => setCosts(prev => ({ ...prev, [id]: val }))} />
         </>
       )}
@@ -244,6 +248,9 @@ function VehiclePanel() {
   const [rows, setRows] = useState<Row[]>([]);
   const [error, setError] = useState(""), [expanded, setExpanded] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
+  const stopRef = useRef(false);
+
+  function stop() { stopRef.current = true; setBusy(false); }
 
   async function decode() {
     if (!vin.trim()) return;
@@ -277,15 +284,16 @@ function VehiclePanel() {
   async function scan() {
     setError(""); setVehicle(null); setRows([]); setExpanded(null); setExhausted(false);
     if (!year || !make || !model) { setError("Enter year, make and model (or decode a VIN)."); return; }
-    setBusy(true);
+    stopRef.current = false; setBusy(true);
     try {
       const pr = await fetch("/api/vehicle-parts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ year, make, model, vin: vin.trim() || undefined }) });
       const pd = await pr.json();
       if (pd.error) { setError(pd.error); setBusy(false); return; }
+      if (stopRef.current) { setBusy(false); return; }
       const v: Vehicle = pd.vehicle;
       const initial: Row[] = pd.parts.map((p: any) => ({ id: p.id, label: p.label, sub: p.category, category: p.category, query: "", cost: 0, status: "pending" as const }));
       setVehicle(v); setRows(initial);
-      await runPool(initial.map(r => r.id), 6, (id) => scanOne(v, id));
+      await runPool(initial.map(r => r.id), 6, (id) => scanOne(v, id), () => stopRef.current);
       setRows(prev => [...prev].sort((a, b) => (b.result?.score?.score ?? -1) - (a.result?.score?.score ?? -1)));
     } catch { setError("Scan failed — check your connection and try again."); }
     setBusy(false);
@@ -308,7 +316,7 @@ function VehiclePanel() {
       </div>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
         <input value={avgCost} onChange={e => setAvgCost(e.target.value)} placeholder="Avg pull $ (optional)" style={{ ...inp, flex: 1 }} inputMode="decimal" />
-        <button onClick={scan} disabled={busy} style={{ ...btnPrimary, minWidth: 132, opacity: busy ? 0.6 : 1 }}>{busy ? "Scanning…" : "Scan vehicle"}</button>
+        <button onClick={busy ? stop : scan} style={busy ? { ...btnStop, minWidth: 132 } : { ...btnPrimary, minWidth: 132 }}>{busy ? "◼ Stop" : "Scan vehicle"}</button>
       </div>
       {error && <div style={errBox}>{error}</div>}
 
@@ -317,7 +325,7 @@ function VehiclePanel() {
           <SummaryCard title={vehicle.label} subtitle={vehicle.engine ? `${vehicle.engine}${vehicle.bodyClass ? ` · ${vehicle.bodyClass}` : ""}` : undefined}
             done={done} total={rows.length} busy={busy} exhausted={exhausted}
             stat1={{ n: String(pulls.length), label: "parts to pull", color: GREEN }} stat2={{ n: money(upside), label: "est. net upside", color: FG }} />
-          <RowList rows={rows} buyWord="PULL" expanded={expanded} setExpanded={setExpanded} onRecheck={(row) => vehicle && scanOne(vehicle, row.id)} />
+          <RowList rows={rows} buyWord="PULL" scanning={busy} expanded={expanded} setExpanded={setExpanded} onRecheck={(row) => vehicle && scanOne(vehicle, row.id)} />
         </>
       )}
     </div>
@@ -347,7 +355,7 @@ function SummaryCard(props: { title: string; subtitle?: string; done: number; to
   );
 }
 
-function RowList({ rows, buyWord, showImage, expanded, setExpanded, onRecheck, costs, onCostChange }: { rows: Row[]; buyWord: string; showImage?: boolean; expanded: string | null; setExpanded: (s: string | null) => void; onRecheck: (row: Row) => void; costs?: Record<string, string>; onCostChange?: (id: string, val: string) => void }) {
+function RowList({ rows, buyWord, showImage, scanning, expanded, setExpanded, onRecheck, costs, onCostChange }: { rows: Row[]; buyWord: string; showImage?: boolean; scanning?: boolean; expanded: string | null; setExpanded: (s: string | null) => void; onRecheck: (row: Row) => void; costs?: Record<string, string>; onCostChange?: (id: string, val: string) => void }) {
   const [sortBy, setSortBy] = useState<SortBy>("best");
   const [cat, setCat] = useState<string | null>(null);
   const [winnersOnly, setWinnersOnly] = useState(false);
@@ -427,13 +435,16 @@ function RowList({ rows, buyWord, showImage, expanded, setExpanded, onRecheck, c
         const isOpen = expanded === row.id;
         const p = row.result;
         const pending = row.status !== "done";
+        // A row is "active" only while a lookup is actually running. Once the user hits Stop,
+        // still-pending rows fall idle — show "—" / "not scanned" instead of a forever-spinner.
+        const active = row.status === "busy" || (pending && scanning);
         const q = p?.query || row.query;
         const tc = TIER_COLOR[tier(row)];
         return (
           <div key={row.id} style={{ background: SURFACE, border: `1px solid ${isOpen ? GREEN + "40" : BORDER}`, borderLeft: `3px solid ${tc}`, borderRadius: 12, overflow: "hidden", opacity: pending ? 0.7 : 1 }}>
             <button onClick={() => !pending && setExpanded(isOpen ? null : row.id)} style={{ width: "100%", display: "flex", alignItems: "center", gap: 11, padding: "10px 12px", background: "transparent", border: "none", color: FG, textAlign: "left" }}>
               <div style={{ flex: "0 0 72px", fontSize: 12, fontWeight: 800, color: v?.color ?? MUTED, background: v?.bg ?? "#0d1e2b", border: `1px solid ${(v?.color ?? MUTED)}44`, borderRadius: 8, padding: "6px 0", textAlign: "center", letterSpacing: "0.03em" }}>
-                {pending ? <Spinner /> : v?.label}
+                {active ? <Spinner /> : pending ? "—" : v?.label}
               </div>
               {showImage && (
                 <div style={{ flex: "0 0 40px", width: 40, height: 40, borderRadius: 7, background: "#081820", border: `1px solid ${BORDER}`, overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -443,7 +454,7 @@ function RowList({ rows, buyWord, showImage, expanded, setExpanded, onRecheck, c
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.label}</div>
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
-                  {pending ? "checking…" :
+                  {active ? "checking…" : pending ? "not scanned — stopped" :
                     p?.outcome === "ok" && p.comps.found
                       ? `${row.sub ? row.sub + " · " : ""}${p.comps.count} sold${p.score ? ` · ${(p.score.roi * 100).toFixed(0)}% ROI` : ""}`
                       : p?.outcome === "failed" ? "couldn’t read — tap RE-CHECK" : "no eBay sales matched"}
@@ -501,6 +512,7 @@ function emptyComps(): Comps { return { found: false, count: 0, median: 0, low: 
 
 const inp: React.CSSProperties = { background: "#081820", border: `1px solid ${BORDER}`, borderRadius: 10, color: FG, padding: "12px 12px", fontSize: 16, outline: "none", minWidth: 0, width: "100%" };
 const btnPrimary: React.CSSProperties = { background: DIM, color: GREEN, border: `1px solid ${GREEN}55`, borderRadius: 10, padding: "12px 16px", fontSize: 15, fontWeight: 800, boxShadow: `0 0 16px ${GREEN}20`, flex: "0 0 auto" };
+const btnStop: React.CSSProperties = { background: "#230d0d", color: RED, border: `1px solid ${RED}77`, borderRadius: 10, padding: "12px 16px", fontSize: 15, fontWeight: 800, boxShadow: `0 0 16px ${RED}22`, flex: "0 0 auto" };
 const btnSecondary: React.CSSProperties = { background: SURFACE, color: FG, border: `1px solid ${BORDER}`, borderRadius: 10, padding: "12px 14px", fontSize: 14, fontWeight: 600 };
 const pill: React.CSSProperties = { fontSize: 12, fontWeight: 600, padding: "7px 12px", borderRadius: 999, border: `1px solid ${BORDER}`, background: "transparent", display: "inline-block" };
 const errBox: React.CSSProperties = { color: RED, fontSize: 13, background: "#230d0d", border: `1px solid ${RED}44`, borderRadius: 8, padding: "8px 12px", marginTop: 10 };
