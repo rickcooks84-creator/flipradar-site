@@ -80,6 +80,7 @@ export async function POST(req: NextRequest) {
   const globalCost = typeof avgCost === 'number' && avgCost >= 0 ? avgCost : undefined;
 
   let keysExhausted = false;
+  let ebayBlocked = false; // eBay served its sign-in wall instead of sold results
 
   const results = await runPool<PartDef, PartResult>(parts, 8, async (part) => {
     const cost = globalCost ?? part.pull ?? PULL_COST_BY_SHIP[part.ship];
@@ -101,6 +102,7 @@ export async function POST(req: NextRequest) {
       const res = await getCarPartComps(vehicle, part, 8000);
       comps = res.comps;
       if (res.status === 'exhausted') { keysExhausted = true; outcome = 'failed'; break; }
+      if (res.status === 'blocked') { ebayBlocked = true; outcome = 'failed'; break; } // sign-in wall — retrying can't open it
       if (res.status === 'ok') { outcome = 'ok'; break; }
       if (res.status === 'empty' && res.parsed > 0) { outcome = 'empty'; break; } // genuine no-match
       outcome = 'failed';
@@ -121,6 +123,7 @@ export async function POST(req: NextRequest) {
     vehicle: { ...vehicle, label: vehicleLabel(vehicle) },
     parts: results,
     keysExhausted,
+    ebayBlocked,
     scannedAt: Date.now(),
   });
 }

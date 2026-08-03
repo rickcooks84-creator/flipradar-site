@@ -14,7 +14,9 @@ export async function POST(req: NextRequest) {
   const run = async (fn: () => Promise<EbayResult>): Promise<EbayResult> => {
     for (let a = 0; a <= 2; a++) {
       const res = await fn();
-      if (res.status === 'ok' || res.status === 'empty' || res.status === 'exhausted') return res;
+      // 'blocked' is terminal like 'exhausted': eBay's sign-in wall never opens on retry,
+      // and retrying burns 3-4x the ScraperAPI credits per product for nothing.
+      if (res.status === 'ok' || res.status === 'empty' || res.status === 'exhausted' || res.status === 'blocked') return res;
       if (a < 2) await new Promise(r => setTimeout(r, 500 * (a + 1) + Math.random() * 300));
     }
     return fn();
@@ -25,5 +27,12 @@ export async function POST(req: NextRequest) {
   const score = c > 0 && res.comps.found ? scoreProduct(c, res.comps) : null;
   const outcome = res.status === 'ok' ? 'ok' : res.status === 'empty' ? 'empty' : 'failed';
 
-  return NextResponse.json({ comps: res.comps, score, outcome, keysExhausted: res.status === 'exhausted' });
+  // `blocked` = eBay served its sign-in wall instead of sold results. Distinct from a
+  // plain failure because re-checking can't fix it, so the UI stops the scan and says so
+  // rather than letting the user grind RE-CHECK on every row.
+  return NextResponse.json({
+    comps: res.comps, score, outcome,
+    keysExhausted: res.status === 'exhausted',
+    blocked: res.status === 'blocked',
+  });
 }

@@ -20,7 +20,11 @@ const EMPTY: SoldComps = { found: false, count: 0, median: 0, low: 0, high: 0, a
 // transient network/timeout, retry a bounded number of times.
 // 'exhausted' = every ScraperAPI key is out of credits → the scan can't continue and
 // the scheduler should stop issuing requests (terminal, not retryable).
-export type FetchStatus = 'ok' | 'empty' | 'throttled' | 'error' | 'exhausted';
+// 'blocked'   = eBay served a sign-in wall instead of results (see isSignInWall). Also
+// terminal: no amount of retrying or backing off opens it, and it must NEVER be
+// downgraded to 'empty' — an empty result reads as "this item has no resale market",
+// which is a confident lie when the truth is "we never got to look".
+export type FetchStatus = 'ok' | 'empty' | 'throttled' | 'error' | 'exhausted' | 'blocked';
 
 
 export interface EbayResult {
@@ -218,6 +222,27 @@ function isThrottlePage(html: string, $: Cheerio$): boolean {
   const title = ($('title').first().text() || '').toLowerCase();
   if (/error page|interruption|are you a human|robot|access denied|pardon our interruption|unusual traffic/.test(title)) return true;
   if (/pardon the interruption|verify you('| a)re a human|unusual activity from your/i.test(html.slice(0, 4000))) return true;
+  return false;
+}
+
+// eBay's SIGN-IN WALL on sold/completed searches.
+//
+// As of 2026-08 eBay gates completed-listing results (LH_Sold / LH_Complete) behind a
+// login: a signed-out request to a sold search 200s but returns the "Sign in or Register"
+// page instead of results. Verified to be SESSION-based, not IP- or proxy-based — a
+// residential IP with a warmed cookie jar and full browser headers gets the same wall,
+// while the identical search WITHOUT the sold filters still returns results normally.
+//
+// This is the single nastiest failure mode this file can have, because the wall is a
+// 200 with zero result cards — indistinguishable from "this product genuinely never sold"
+// unless we look for it. Left undetected it makes the scanner report NO MARKET on every
+// product of a store with daily sales, which is exactly backwards from the truth and is
+// worse than an outright error: the user acts on it.
+function isSignInWall(html: string, $: Cheerio$): boolean {
+  const title = ($('title').first().text() || '').toLowerCase();
+  if (/sign in or register/.test(title)) return true;
+  // Redirect landed on the signin host (captured in the canonical/og URL of the page).
+  if (/https:\/\/signin\.ebay\.[a-z.]+\//i.test(html.slice(0, 4000))) return true;
   return false;
 }
 
@@ -596,6 +621,7 @@ async function fetchSoldItemsUncached(keywords: string, timeoutMs: number): Prom
   if (!raw.ok || !raw.html) return { status: 'error', items: [] };
 
   const $ = cheerio.load(raw.html);
+  if (isSignInWall(raw.html, $)) return { status: 'blocked', items: [] };
   if (isThrottlePage(raw.html, $)) return { status: 'throttled', items: [] };
 
   // Parse ONLY the exact-match region — drop eBay's "fewer words" fuzzy filler so we never

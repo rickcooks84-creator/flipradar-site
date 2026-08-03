@@ -153,6 +153,7 @@ function StorePanel() {
   const [note, setNote] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
+  const [blocked, setBlocked] = useState(false);
   const stopRef = useRef(false);
 
   function stop() { stopRef.current = true; setBusy(false); }
@@ -163,6 +164,9 @@ function StorePanel() {
       const res = await fetch("/api/comp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: row.query, cost: row.cost }) });
       const d = await res.json();
       if (d.keysExhausted) setExhausted(true);
+      // eBay's sign-in wall hits every product identically — halt the pool instead of
+      // running the whole catalog into the same wall and showing a page of blank rows.
+      if (d.blocked) { setBlocked(true); stopRef.current = true; }
       setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: "done", result: { comps: d.comps, score: d.score, outcome: d.outcome, query: row.query, cost: row.cost } } : r));
     } catch {
       setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: "done", result: { comps: emptyComps(), score: null, outcome: "failed", query: row.query, cost: row.cost } } : r));
@@ -170,7 +174,7 @@ function StorePanel() {
   }
 
   async function scan() {
-    setError(""); setNote(""); setRows([]); setExpanded(null); setExhausted(false);
+    setError(""); setNote(""); setRows([]); setExpanded(null); setExhausted(false); setBlocked(false);
     if (!/^https?:\/\//i.test(url.trim())) { setError("Enter a full store URL starting with https://"); return; }
     stopRef.current = false; setBusy(true);
     try {
@@ -217,6 +221,13 @@ function StorePanel() {
       </div>
       <div style={{ fontSize: 11, color: MUTED, marginTop: 8 }}>Works best on Shopify stores. Point at a collection/category page, not the homepage.</div>
       {error && <div style={errBox}>{error}</div>}
+
+      {blocked && (
+        <div style={{ ...errBox, borderColor: AMBER, color: AMBER }}>
+          eBay is requiring sign-in to view sold listings right now, so comps couldn’t be checked.
+          Scan stopped — this is <strong>not</strong> a sign these products have no resale market.
+        </div>
+      )}
 
       {rows.length > 0 && (
         <>
