@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 // ─── FlipSonar green/navy theme ───────────────────────────────────────────────
 const BG = "#07111a", SURFACE = "#0d1e2b", BORDER = "#1a3a2e", MUTED = "#5a8a78";
@@ -144,6 +144,93 @@ function Tab({ active, onClick, icon, label }: { active: boolean; onClick: () =>
   );
 }
 
+// ─── Scan cooldown ────────────────────────────────────────────────────────────
+//
+// Sold-comp lookups ride the user's own eBay session, and one scan fires far more
+// searches than ordinary browsing ever would. It's back-to-back BIG scans that make an
+// account look automated, so the app rests afterwards — scaled to how much it just did.
+// A 60-product collection barely pauses; a 2,000-product catalog earns a real break.
+//
+// Persisted to localStorage rather than component state ON PURPOSE: a cooldown that a
+// page refresh clears is decoration, not protection.
+const COOLDOWN_MS_PER_PRODUCT = 250;
+const COOLDOWN_MIN_MS = 30_000;          // even a tiny scan gets a breather
+const COOLDOWN_MAX_MS = 15 * 60_000;     // cap it — past this it just feels broken
+const COOLDOWN_KEY = "fs_scan_cooldown_until";
+
+function cooldownFor(products: number): number {
+  return Math.min(COOLDOWN_MAX_MS, Math.max(COOLDOWN_MIN_MS, Math.round(products * COOLDOWN_MS_PER_PRODUCT)));
+}
+
+function fmtDur(ms: number): string {
+  const s = Math.ceil(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+function useScanCooldown() {
+  const [until, setUntil] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+
+  // Restore a cooldown that was still running when the page was closed/refreshed.
+  useEffect(() => {
+    const saved = Number(localStorage.getItem(COOLDOWN_KEY) || 0);
+    if (saved > Date.now()) { setUntil(saved); setNow(Date.now()); }
+  }, []);
+
+  // Tick only while one is actually active — no permanent 1s timer on an idle page.
+  useEffect(() => {
+    if (until <= Date.now()) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [until]);
+
+  const remainingMs = Math.max(0, until - now);
+  function start(products: number) {
+    const u = Date.now() + cooldownFor(products);
+    localStorage.setItem(COOLDOWN_KEY, String(u));
+    setUntil(u);
+    setNow(Date.now());
+  }
+  return { remainingMs, active: remainingMs > 0, start };
+}
+
+// ─── eBay account notice ──────────────────────────────────────────────────────
+//
+// eBay requires a signed-in session to read sold listings, so comps are pulled through
+// the user's own eBay account. That carries a real (if modest) risk to that account, and
+// they should know before they scan — but framed as setup guidance, not a scare banner.
+// The single mitigation that actually matters (use a separate account) leads, because a
+// warning nobody acts on is worse than no warning at all.
+function EbayAccountNotice() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+      <div style={{ fontSize: 12, color: FG, lineHeight: 1.5 }}>
+        <span style={{ color: GREEN, fontWeight: 700 }}>Before you scan ·</span>{" "}
+        Sold prices come from your own eBay session. We recommend using a{" "}
+        <strong>separate eBay account</strong> for scanning — not the one you sell on.{" "}
+        <button
+          onClick={() => setOpen(o => !o)}
+          style={{ background: "transparent", border: "none", color: GREEN, fontSize: 12, fontWeight: 700, padding: 0, textDecoration: "underline" }}
+        >
+          {open ? "Hide details" : "Why?"}
+        </button>
+      </div>
+
+      {open && (
+        <ul style={{ fontSize: 12, color: MUTED, lineHeight: 1.65, margin: "10px 0 2px", paddingLeft: 18 }}>
+          <li>eBay only shows sold listings to signed-in users, so FlipSonar reads them through your session.</li>
+          <li>A scan runs many searches in a short window — more than normal browsing. eBay may slow down, challenge, or limit accounts doing this.</li>
+          <li>FlipSonar paces each scan and rests between them to keep activity reasonable, but it can&apos;t rule the risk out entirely.</li>
+          <li>A free second eBay account keeps your selling account out of it. Worth knowing: eBay can associate accounts used on the same device or network.</li>
+          <li>Scanning is at your own discretion.</li>
+        </ul>
+      )}
+    </div>
+  );
+}
+
 // ─── STORE ARBITRAGE (paste a URL → comps + buy score) ────────────────────────
 function StorePanel() {
   const [url, setUrl] = useState("");
@@ -155,11 +242,16 @@ function StorePanel() {
   const [exhausted, setExhausted] = useState(false);
   const [blocked, setBlocked] = useState(false);
   const stopRef = useRef(false);
+  const cooldown = useScanCooldown();
+  // Counts lookups actually sent this scan, so the cooldown reflects real eBay activity —
+  // stopping after 5 products shouldn't cost the same rest as scanning 2,000.
+  const doneCountRef = useRef(0);
 
   function stop() { stopRef.current = true; setBusy(false); }
 
   async function scanOne(row: Row) {
     setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: "busy" } : r));
+    doneCountRef.current += 1;
     try {
       const res = await fetch("/api/comp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: row.query, cost: row.cost }) });
       const d = await res.json();
@@ -176,7 +268,9 @@ function StorePanel() {
   async function scan() {
     setError(""); setNote(""); setRows([]); setExpanded(null); setExhausted(false); setBlocked(false);
     if (!/^https?:\/\//i.test(url.trim())) { setError("Enter a full store URL starting with https://"); return; }
+    if (cooldown.active) { setError(`Cooling down — you can scan again in ${fmtDur(cooldown.remainingMs)}.`); return; }
     stopRef.current = false; setBusy(true);
+    doneCountRef.current = 0;
     try {
       const r = await fetch("/api/store-scrape", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url: url.trim() }) });
       const d = await r.json();
@@ -191,6 +285,7 @@ function StorePanel() {
       await runPool(initial, 6, scanOne, () => stopRef.current);
       setRows(prev => [...prev].sort((a, b) => (b.result?.score?.score ?? -1) - (a.result?.score?.score ?? -1)));
     } catch { setError("Scan failed — check the URL and your connection."); }
+    if (doneCountRef.current > 0) cooldown.start(doneCountRef.current);
     setBusy(false);
   }
 
@@ -209,17 +304,34 @@ function StorePanel() {
     return { ...r, sub: money(c), result: { ...r.result, cost: c, score: scoreClient(c, r.result.comps) } };
   });
 
+  // Cooling only matters when idle — mid-scan the button is the Stop control.
+  const cooling = cooldown.active && !busy;
   const done = rows.filter(r => r.status === "done").length;
   const buys = scoredRows.filter(r => r.result?.outcome === "ok" && (r.result.score?.score ?? 0) >= 55);
   const upside = buys.reduce((s, r) => s + Math.max(0, r.result!.score!.estimatedProfit), 0);
 
   return (
     <div style={{ padding: 16, position: "relative", zIndex: 1 }}>
+      <EbayAccountNotice />
       <div style={{ display: "flex", gap: 8 }}>
         <input value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => { if (e.key === "Enter") scan(); }} placeholder="Paste a store or collection URL" style={inp} inputMode="url" autoCapitalize="none" spellCheck={false} />
-        <button onClick={busy ? stop : scan} style={busy ? { ...btnStop, minWidth: 96 } : { ...btnPrimary, minWidth: 96 }}>{busy ? "◼ Stop" : "Scan"}</button>
+        <button
+          onClick={busy ? stop : scan}
+          disabled={cooling}
+          style={
+            busy ? { ...btnStop, minWidth: 96 }
+            : cooling ? { ...btnPrimary, minWidth: 96, background: SURFACE, color: MUTED, borderColor: BORDER, boxShadow: "none" }
+            : { ...btnPrimary, minWidth: 96 }
+          }
+        >
+          {busy ? "◼ Stop" : cooling ? fmtDur(cooldown.remainingMs) : "Scan"}
+        </button>
       </div>
-      <div style={{ fontSize: 11, color: MUTED, marginTop: 8 }}>Works best on Shopify stores. Point at a collection/category page, not the homepage.</div>
+      <div style={{ fontSize: 11, color: MUTED, marginTop: 8 }}>
+        {cooling
+          ? "Resting before the next scan so your eBay activity stays in a normal range. Larger scans rest longer."
+          : "Works best on Shopify stores. Point at a collection/category page, not the homepage."}
+      </div>
       {error && <div style={errBox}>{error}</div>}
 
       {blocked && (
