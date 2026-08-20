@@ -8,7 +8,8 @@
     "start": "next start",
     "ext:build": "node scripts/build-extension.mjs",
     "test:parser": "node scripts/test-parser-parity.mjs",
-    "test:ext": "node scripts/test-extension-e2e.mjs"
+    "test:ext": "node scripts/test-extension-e2e.mjs",
+    "spike:browserbase": "node scripts/browserbase-spike.mjs"
   },
   "dependencies": {
     "cheerio": "^1.2.0",
@@ -21,6 +22,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "puppeteer-core": "^25.8.0",
     "typescript": "^5"
   }
 }
