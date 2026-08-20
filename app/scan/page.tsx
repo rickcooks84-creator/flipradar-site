@@ -1,6 +1,5 @@
 "use client";
-import { useState, useRef, useEffect, useCallback, createContext, useContext } from "react";
-import { pingExtension, probeEbaySession, lookupSold } from "@/app/lib/ext-client";
+import { useState, useRef, useEffect } from "react";
 
 // ─── FlipSonar green/navy theme ───────────────────────────────────────────────
 const BG = "#07111a", SURFACE = "#0d1e2b", BORDER = "#1a3a2e", MUTED = "#5a8a78";
@@ -93,9 +92,6 @@ async function runPool<T>(items: T[], concurrency: number, worker: (item: T) => 
 
 export default function ScanPage() {
   const [mode, setMode] = useState<Mode>("store");
-  // Held at the page level so both scan modes share ONE connection check — probing eBay
-  // costs a real request, and doing it per panel would double it for no information.
-  const ebay = useEbayConnection();
 
   async function logout() {
     // Web build uses a session cookie (→ /login); the desktop build uses a local license
@@ -112,7 +108,6 @@ export default function ScanPage() {
   }
 
   return (
-    <EbayCtx.Provider value={ebay}>
     <div style={{ minHeight: "100vh", background: BG, color: FG, fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
       <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0, background: "radial-gradient(ellipse at 20% 0%, #0a2a1a20 0%, transparent 55%)" }} />
 
@@ -133,7 +128,6 @@ export default function ScanPage() {
 
       {mode === "store" ? <StorePanel /> : <VehiclePanel />}
     </div>
-    </EbayCtx.Provider>
   );
 }
 
@@ -201,225 +195,39 @@ function useScanCooldown() {
   return { remainingMs, active: remainingMs > 0, start };
 }
 
-// ─── eBay connection (the FlipSonar browser extension) ────────────────────────
+// ─── eBay account notice ──────────────────────────────────────────────────────
 //
-// eBay stopped serving sold listings to signed-out sessions in 2026-07, and a website
-// cannot borrow a signed-in one: eBay's cookies are HttpOnly and scoped to ebay.com, so
-// this page's JavaScript can never read them, and eBay's search pages send no CORS
-// headers, so the browser blocks the page from reading a response even when the cookies
-// ride along. The FlipSonar extension is the one context in the browser allowed to make
-// that request — so "connect eBay" on the web means installing it and signing in to eBay
-// normally, in the same browser.
-//
-// Everything here is about making that state legible. A user whose session has quietly
-// lapsed must see "sign in", not a page of products reporting no resale market.
-type EbayState = "checking" | "missing" | "signed_out" | "throttled" | "layout" | "error" | "connected";
-
-const PROBE_KEY = "fs_ebay_probe";
-const PROBE_TTL_MS = 6 * 60 * 60_000;  // a good probe is trusted for 6h — don't re-ask eBay every mount
-const PROBE_RETRY_MS = 60_000;         // a bad one re-checks sooner, but not on every render
-const EBAY_SIGNIN = "https://signin.ebay.com/ws/eBayISAPI.dll?SignIn";
-const EXT_ZIP = "/flipsonar-ebay-connector.zip";
-
-interface EbayConn { state: EbayState; version: string | null; recheck: () => void; markBlocked: () => void; }
-
-const EbayCtx = createContext<EbayConn>({ state: "checking", version: null, recheck: () => {}, markBlocked: () => {} });
-const useEbay = () => useContext(EbayCtx);
-
-function useEbayConnection(): EbayConn {
-  const [state, setState] = useState<EbayState>("checking");
-  const [version, setVersion] = useState<string | null>(null);
-
-  const run = useCallback(async (force: boolean) => {
-    setState("checking");
-    const v = await pingExtension();
-    setVersion(v);
-    if (!v) { setState("missing"); return; }
-
-    // The probe costs a real eBay request, so a recent answer is reused rather than
-    // re-asked on every page load — the same 6h trust window the desktop app uses.
-    if (!force) {
-      try {
-        const c = JSON.parse(localStorage.getItem(PROBE_KEY) || "null");
-        const ttl = c?.state === "connected" ? PROBE_TTL_MS : PROBE_RETRY_MS;
-        if (c && Date.now() - c.at < ttl) { setState(c.state); return; }
-      } catch {}
-    }
-
-    const status = await probeEbaySession();
-    // 'empty' deserves its own state. The probe searches a product with thousands of sold
-    // listings, so zero parsed results is not "no market" — it means eBay changed its page
-    // and the parser needs updating. That exact failure has silently zeroed comps before,
-    // and it is worth naming instead of showing as a generic error.
-    const next: EbayState =
-      status === "ok" ? "connected" :
-      status === "blocked" ? "signed_out" :
-      status === "throttled" ? "throttled" :
-      status === "empty" ? "layout" : "error";
-    try { localStorage.setItem(PROBE_KEY, JSON.stringify({ state: next, at: Date.now() })); } catch {}
-    setState(next);
-  }, []);
-
-  useEffect(() => { run(false); }, [run]);
-
-  // A scan that hits the wall proves a stored "connected" is stale. Drop it so the user is
-  // asked to sign in again rather than grinding a whole catalog through a dead session.
-  const markBlocked = useCallback(() => {
-    try { localStorage.setItem(PROBE_KEY, JSON.stringify({ state: "signed_out", at: Date.now() })); } catch {}
-    setState("signed_out");
-  }, []);
-
-  return { state, version, recheck: () => { void run(true); }, markBlocked };
-}
-
-// The account-safety guidance. Still the single mitigation that matters, and more relevant
-// on the web than on desktop: this is the user's everyday browser session, so the eBay
-// account doing the scanning is whichever one they're already signed into.
-function EbaySafetyNote() {
+// eBay requires a signed-in session to read sold listings, so comps are pulled through
+// the user's own eBay account. That carries a real (if modest) risk to that account, and
+// they should know before they scan — but framed as setup guidance, not a scare banner.
+// The single mitigation that actually matters (use a separate account) leads, because a
+// warning nobody acts on is worse than no warning at all.
+function EbayAccountNotice() {
   const [open, setOpen] = useState(false);
   return (
-    <>
-      <button
-        onClick={() => setOpen(o => !o)}
-        style={{ background: "transparent", border: "none", color: GREEN, fontSize: 12, fontWeight: 700, padding: 0, textDecoration: "underline", cursor: "pointer" }}
-      >
-        {open ? "Hide details" : "Which eBay account should I use?"}
-      </button>
+    <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+      <div style={{ fontSize: 12, color: FG, lineHeight: 1.5 }}>
+        <span style={{ color: GREEN, fontWeight: 700 }}>Before you scan ·</span>{" "}
+        Sold prices come from your own eBay session. We recommend using a{" "}
+        <strong>separate eBay account</strong> for scanning — not the one you sell on.{" "}
+        <button
+          onClick={() => setOpen(o => !o)}
+          style={{ background: "transparent", border: "none", color: GREEN, fontSize: 12, fontWeight: 700, padding: 0, textDecoration: "underline" }}
+        >
+          {open ? "Hide details" : "Why?"}
+        </button>
+      </div>
+
       {open && (
         <ul style={{ fontSize: 12, color: MUTED, lineHeight: 1.65, margin: "10px 0 2px", paddingLeft: 18 }}>
-          <li>Use a <strong>separate eBay account</strong> for scanning — not the one you sell on.</li>
+          <li>eBay only shows sold listings to signed-in users, so FlipSonar reads them through your session.</li>
           <li>A scan runs many searches in a short window — more than normal browsing. eBay may slow down, challenge, or limit accounts doing this.</li>
-          <li>FlipSonar paces every lookup and rests between scans to keep activity reasonable, but it can&apos;t rule the risk out entirely.</li>
-          <li>Worth knowing: eBay can associate accounts used on the same device or network.</li>
+          <li>FlipSonar paces each scan and rests between them to keep activity reasonable, but it can&apos;t rule the risk out entirely.</li>
+          <li>A free second eBay account keeps your selling account out of it. Worth knowing: eBay can associate accounts used on the same device or network.</li>
           <li>Scanning is at your own discretion.</li>
         </ul>
       )}
-    </>
-  );
-}
-
-function ConnectBox({ tone, children }: { tone: "green" | "amber" | "plain"; children: React.ReactNode }) {
-  const accent = tone === "green" ? GREEN : tone === "amber" ? AMBER : BORDER;
-  return (
-    <div style={{
-      background: SURFACE, border: `1px solid ${tone === "plain" ? BORDER : accent + "55"}`,
-      borderRadius: 10, padding: "11px 12px", marginBottom: 10,
-    }}>
-      {children}
     </div>
-  );
-}
-
-const linkBtn: React.CSSProperties = {
-  display: "inline-block", background: GREEN, color: "#03210f", fontWeight: 700, fontSize: 12,
-  padding: "8px 13px", borderRadius: 8, textDecoration: "none", marginTop: 9,
-};
-const ghostBtn: React.CSSProperties = {
-  display: "inline-block", background: "transparent", color: GREEN, fontWeight: 700, fontSize: 12,
-  padding: "7px 12px", borderRadius: 8, border: `1px solid ${GREEN}55`, textDecoration: "none",
-  marginTop: 9, marginLeft: 8, cursor: "pointer",
-};
-
-function EbayConnectCard() {
-  const { state, recheck } = useEbay();
-
-  if (state === "checking") {
-    return (
-      <ConnectBox tone="plain">
-        <div style={{ fontSize: 12, color: MUTED }}>Checking your eBay connection…</div>
-      </ConnectBox>
-    );
-  }
-
-  if (state === "connected") {
-    return (
-      <ConnectBox tone="green">
-        <div style={{ fontSize: 12, color: FG, lineHeight: 1.5 }}>
-          <span style={{ color: GREEN, fontWeight: 700 }}>● eBay connected ·</span>{" "}
-          Sold prices are read through your own eBay session, in this browser.{" "}
-          <EbaySafetyNote />
-        </div>
-      </ConnectBox>
-    );
-  }
-
-  if (state === "missing") {
-    return (
-      <ConnectBox tone="plain">
-        <div style={{ fontSize: 12, color: FG, lineHeight: 1.5 }}>
-          <span style={{ color: GREEN, fontWeight: 700 }}>Connect eBay to scan ·</span>{" "}
-          eBay only shows sold prices to signed-in users. FlipSonar reads them through your own
-          eBay session using a small browser extension — your login never leaves your browser.
-        </div>
-        <ol style={{ fontSize: 12, color: MUTED, lineHeight: 1.7, margin: "10px 0 2px", paddingLeft: 18 }}>
-          <li>Download the extension and unzip it somewhere permanent.</li>
-          <li>Open <code style={{ fontFamily: MONO, color: FG }}>chrome://extensions</code> (paste it in the address bar).</li>
-          <li>Turn on <strong>Developer mode</strong>, top right.</li>
-          <li>Click <strong>Load unpacked</strong> and choose the unzipped folder.</li>
-          <li>Come back here and refresh this page.</li>
-        </ol>
-        <a href={EXT_ZIP} download style={linkBtn}>Download extension</a>
-        <button onClick={recheck} style={ghostBtn}>I&apos;ve installed it</button>
-        <div style={{ fontSize: 11, color: MUTED, marginTop: 9 }}>
-          <EbaySafetyNote />
-        </div>
-      </ConnectBox>
-    );
-  }
-
-  if (state === "signed_out") {
-    return (
-      <ConnectBox tone="amber">
-        <div style={{ fontSize: 12, color: FG, lineHeight: 1.5 }}>
-          <span style={{ color: AMBER, fontWeight: 700 }}>Sign in to eBay ·</span>{" "}
-          The extension is installed, but eBay isn&apos;t serving sold listings to this browser —
-          that means no eBay account is signed in. Sign in once and comps start working.
-        </div>
-        <a href={EBAY_SIGNIN} target="_blank" rel="noreferrer" style={linkBtn}>Sign in to eBay →</a>
-        <button onClick={recheck} style={ghostBtn}>Check again</button>
-        <div style={{ fontSize: 11, color: MUTED, marginTop: 9 }}>
-          <EbaySafetyNote />
-        </div>
-      </ConnectBox>
-    );
-  }
-
-  if (state === "throttled") {
-    return (
-      <ConnectBox tone="amber">
-        <div style={{ fontSize: 12, color: FG, lineHeight: 1.5 }}>
-          <span style={{ color: AMBER, fontWeight: 700 }}>eBay is throttling ·</span>{" "}
-          eBay is challenging requests from this session instead of returning results. Give it a
-          few minutes before scanning — comps read now would be unreliable.
-        </div>
-        <button onClick={recheck} style={{ ...ghostBtn, marginLeft: 0 }}>Check again</button>
-      </ConnectBox>
-    );
-  }
-
-  if (state === "layout") {
-    return (
-      <ConnectBox tone="amber">
-        <div style={{ fontSize: 12, color: FG, lineHeight: 1.5 }}>
-          <span style={{ color: AMBER, fontWeight: 700 }}>eBay changed its results page ·</span>{" "}
-          We reached eBay fine but couldn&apos;t read any listings off a search that should have
-          thousands. This is a FlipSonar-side fix, not something you can solve — scanning now
-          would report no market on everything. Please let support know.
-        </div>
-        <button onClick={recheck} style={{ ...ghostBtn, marginLeft: 0 }}>Check again</button>
-      </ConnectBox>
-    );
-  }
-
-  return (
-    <ConnectBox tone="amber">
-      <div style={{ fontSize: 12, color: FG, lineHeight: 1.5 }}>
-        <span style={{ color: AMBER, fontWeight: 700 }}>Couldn&apos;t reach eBay ·</span>{" "}
-        The extension is installed but the request didn&apos;t complete. Check your connection
-        and try again.
-      </div>
-      <button onClick={recheck} style={{ ...ghostBtn, marginLeft: 0 }}>Check again</button>
-    </ConnectBox>
   );
 }
 
@@ -435,39 +243,22 @@ function StorePanel() {
   const [blocked, setBlocked] = useState(false);
   const stopRef = useRef(false);
   const cooldown = useScanCooldown();
-  const ebay = useEbay();
   // Counts lookups actually sent this scan, so the cooldown reflects real eBay activity —
   // stopping after 5 products shouldn't cost the same rest as scanning 2,000.
   const doneCountRef = useRef(0);
 
   function stop() { stopRef.current = true; setBusy(false); }
 
-  // Extension path: the eBay page is fetched HERE, inside the user's own signed-in session,
-  // and only the parsed listings travel to the server. Relevance and scoring stay server-side
-  // so a row scores identically whichever path fetched it.
-  async function compViaExtension(row: Row) {
-    const { status, items } = await lookupSold(row.query);
-    const res = await fetch("/api/comp-items", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: row.query, cost: row.cost, status, items }),
-    });
-    return res.json();
-  }
-
   async function scanOne(row: Row) {
     setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: "busy" } : r));
     doneCountRef.current += 1;
     try {
-      // Without the extension we still call /api/comp, which fetches server-side and — since
-      // eBay walled sold data — comes back 'blocked'. That fallback is kept on purpose: an
-      // honest refusal is the right answer, and it is never downgraded to "no market".
-      const d = ebay.state === "connected"
-        ? await compViaExtension(row)
-        : await (await fetch("/api/comp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: row.query, cost: row.cost }) })).json();
+      const res = await fetch("/api/comp", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: row.query, cost: row.cost }) });
+      const d = await res.json();
       if (d.keysExhausted) setExhausted(true);
       // eBay's sign-in wall hits every product identically — halt the pool instead of
       // running the whole catalog into the same wall and showing a page of blank rows.
-      if (d.blocked) { setBlocked(true); stopRef.current = true; ebay.markBlocked(); }
+      if (d.blocked) { setBlocked(true); stopRef.current = true; }
       setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: "done", result: { comps: d.comps, score: d.score, outcome: d.outcome, query: row.query, cost: row.cost } } : r));
     } catch {
       setRows(prev => prev.map(r => r.id === row.id ? { ...r, status: "done", result: { comps: emptyComps(), score: null, outcome: "failed", query: row.query, cost: row.cost } } : r));
@@ -521,7 +312,7 @@ function StorePanel() {
 
   return (
     <div style={{ padding: 16, position: "relative", zIndex: 1 }}>
-      <EbayConnectCard />
+      <EbayAccountNotice />
       <div style={{ display: "flex", gap: 8 }}>
         <input value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => { if (e.key === "Enter") scan(); }} placeholder="Paste a store or collection URL" style={inp} inputMode="url" autoCapitalize="none" spellCheck={false} />
         <button
@@ -580,9 +371,7 @@ function VehiclePanel() {
   const [rows, setRows] = useState<Row[]>([]);
   const [error, setError] = useState(""), [expanded, setExpanded] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
-  const [blocked, setBlocked] = useState(false);
   const stopRef = useRef(false);
-  const ebay = useEbay();
 
   function stop() { stopRef.current = true; setBusy(false); }
 
@@ -597,30 +386,14 @@ function VehiclePanel() {
     setDecoding(false);
   }
 
-  // Extension path for one part: fetch that part's sold page inside the user's eBay session,
-  // then let the server apply the vehicle-fit relevance gate and the price floor. The part
-  // definition is resolved server-side from its id, so the fit rules can't be tampered with.
-  async function partViaExtension(v: Vehicle, id: string, query: string) {
-    const { status, items } = await lookupSold(query);
-    const body: any = { year: v.year, make: v.make, model: v.model, partId: id, status, items };
-    if (avgCost.trim()) body.avgCost = parseFloat(avgCost);
-    const res = await fetch("/api/vehicle-comp-items", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-    });
-    return res.json();
-  }
-
-  async function scanOne(v: Vehicle, id: string, query: string) {
+  async function scanOne(v: Vehicle, id: string) {
     setRows(prev => prev.map(r => r.id === id ? { ...r, status: "busy" } : r));
     try {
       const body: any = { year: v.year, make: v.make, model: v.model, only: [id] };
       if (avgCost.trim()) body.avgCost = parseFloat(avgCost);
-      const d = ebay.state === "connected"
-        ? await partViaExtension(v, id, query)
-        : await (await fetch("/api/vehicle-scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+      const r = await fetch("/api/vehicle-scan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const d = await r.json();
       if (d.keysExhausted) setExhausted(true);
-      // Same wall, same response: stop rather than run every remaining part into it.
-      if (d.ebayBlocked) { setBlocked(true); stopRef.current = true; ebay.markBlocked(); }
       const p = d.parts?.[0];
       setRows(prev => prev.map(row => row.id === id ? {
         ...row, status: "done",
@@ -632,7 +405,7 @@ function VehiclePanel() {
   }
 
   async function scan() {
-    setError(""); setVehicle(null); setRows([]); setExpanded(null); setExhausted(false); setBlocked(false);
+    setError(""); setVehicle(null); setRows([]); setExpanded(null); setExhausted(false);
     if (!year || !make || !model) { setError("Enter year, make and model (or decode a VIN)."); return; }
     stopRef.current = false; setBusy(true);
     try {
@@ -641,9 +414,9 @@ function VehiclePanel() {
       if (pd.error) { setError(pd.error); setBusy(false); return; }
       if (stopRef.current) { setBusy(false); return; }
       const v: Vehicle = pd.vehicle;
-      const initial: Row[] = pd.parts.map((p: any) => ({ id: p.id, label: p.label, sub: p.category, category: p.category, query: p.query || "", cost: 0, status: "pending" as const }));
+      const initial: Row[] = pd.parts.map((p: any) => ({ id: p.id, label: p.label, sub: p.category, category: p.category, query: "", cost: 0, status: "pending" as const }));
       setVehicle(v); setRows(initial);
-      await runPool(initial, 6, (r) => scanOne(v, r.id, r.query), () => stopRef.current);
+      await runPool(initial.map(r => r.id), 6, (id) => scanOne(v, id), () => stopRef.current);
       setRows(prev => [...prev].sort((a, b) => (b.result?.score?.score ?? -1) - (a.result?.score?.score ?? -1)));
     } catch { setError("Scan failed — check your connection and try again."); }
     setBusy(false);
@@ -655,7 +428,6 @@ function VehiclePanel() {
 
   return (
     <div style={{ padding: 16, position: "relative", zIndex: 1 }}>
-      <EbayConnectCard />
       <div style={{ display: "flex", gap: 8 }}>
         <input value={vin} onChange={e => setVin(e.target.value.toUpperCase())} placeholder="Paste VIN (optional)" style={inp} autoCapitalize="characters" spellCheck={false} />
         <button onClick={decode} disabled={decoding || !vin.trim()} style={{ ...btnSecondary, opacity: (decoding || !vin.trim()) ? 0.5 : 1, whiteSpace: "nowrap" }}>{decoding ? "…" : "Decode"}</button>
@@ -671,19 +443,12 @@ function VehiclePanel() {
       </div>
       {error && <div style={errBox}>{error}</div>}
 
-      {blocked && (
-        <div style={{ ...errBox, borderColor: AMBER, color: AMBER }}>
-          eBay is requiring sign-in to view sold listings right now, so comps couldn’t be checked.
-          Scan stopped — this is <strong>not</strong> a sign these parts have no resale market.
-        </div>
-      )}
-
       {vehicle && (
         <>
           <SummaryCard title={vehicle.label} subtitle={vehicle.engine ? `${vehicle.engine}${vehicle.bodyClass ? ` · ${vehicle.bodyClass}` : ""}` : undefined}
             done={done} total={rows.length} busy={busy} exhausted={exhausted}
             stat1={{ n: String(pulls.length), label: "parts to pull", color: GREEN }} stat2={{ n: money(upside), label: "est. net upside", color: FG }} />
-          <RowList rows={rows} buyWord="PULL" scanning={busy} expanded={expanded} setExpanded={setExpanded} onRecheck={(row) => vehicle && scanOne(vehicle, row.id, row.query)} />
+          <RowList rows={rows} buyWord="PULL" scanning={busy} expanded={expanded} setExpanded={setExpanded} onRecheck={(row) => vehicle && scanOne(vehicle, row.id)} />
         </>
       )}
     </div>
