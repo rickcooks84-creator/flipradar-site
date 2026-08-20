@@ -195,37 +195,53 @@ function useScanCooldown() {
   return { remainingMs, active: remainingMs > 0, start };
 }
 
-// ─── eBay account notice ──────────────────────────────────────────────────────
+// ─── eBay status notice ───────────────────────────────────────────────────────
 //
-// eBay requires a signed-in session to read sold listings, so comps are pulled through
-// the user's own eBay account. That carries a real (if modest) risk to that account, and
-// they should know before they scan — but framed as setup guidance, not a scare banner.
-// The single mitigation that actually matters (use a separate account) leads, because a
-// warning nobody acts on is worse than no warning at all.
-function EbayAccountNotice() {
+// This used to say "sold prices come from your own eBay session", which is true of the
+// DESKTOP app and has never been true here. On the web there is no eBay session and no
+// way to offer one: eBay only serves sold listings to signed-in users, and a website can
+// never borrow that sign-in — the cookies are HttpOnly and scoped to ebay.com, and eBay
+// sends no CORS headers, so this page is locked out twice over by the browser itself.
+//
+// Telling users to "use a separate eBay account" while giving them nothing to connect is
+// worse than saying nothing: it implies a setting they'll go hunting for and never find.
+// So this states the limitation plainly and sends them to the one place it does work.
+function EbayStatusNotice() {
   const [open, setOpen] = useState(false);
   return (
-    <div style={{ background: SURFACE, border: `1px solid ${BORDER}`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+    <div style={{ background: SURFACE, border: `1px solid ${AMBER}44`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
       <div style={{ fontSize: 12, color: FG, lineHeight: 1.5 }}>
-        <span style={{ color: GREEN, fontWeight: 700 }}>Before you scan ·</span>{" "}
-        Sold prices come from your own eBay session. We recommend using a{" "}
-        <strong>separate eBay account</strong> for scanning — not the one you sell on.{" "}
+        <span style={{ color: AMBER, fontWeight: 700 }}>Sold prices aren&apos;t available in the browser ·</span>{" "}
+        eBay only shows sold listings to signed-in users, and a website can&apos;t use your eBay
+        account. Scans here still list a store&apos;s products and prices, but comps will report
+        that they couldn&apos;t be checked rather than guess.{" "}
         <button
           onClick={() => setOpen(o => !o)}
-          style={{ background: "transparent", border: "none", color: GREEN, fontSize: 12, fontWeight: 700, padding: 0, textDecoration: "underline" }}
+          style={{ background: "transparent", border: "none", color: AMBER, fontSize: 12, fontWeight: 700, padding: 0, textDecoration: "underline", cursor: "pointer" }}
         >
-          {open ? "Hide details" : "Why?"}
+          {open ? "Hide details" : "What can I do?"}
         </button>
       </div>
 
       {open && (
-        <ul style={{ fontSize: 12, color: MUTED, lineHeight: 1.65, margin: "10px 0 2px", paddingLeft: 18 }}>
-          <li>eBay only shows sold listings to signed-in users, so FlipSonar reads them through your session.</li>
-          <li>A scan runs many searches in a short window — more than normal browsing. eBay may slow down, challenge, or limit accounts doing this.</li>
-          <li>FlipSonar paces each scan and rests between them to keep activity reasonable, but it can&apos;t rule the risk out entirely.</li>
-          <li>A free second eBay account keeps your selling account out of it. Worth knowing: eBay can associate accounts used on the same device or network.</li>
-          <li>Scanning is at your own discretion.</li>
-        </ul>
+        <>
+          <ul style={{ fontSize: 12, color: MUTED, lineHeight: 1.65, margin: "10px 0 2px", paddingLeft: 18 }}>
+            <li>
+              <strong style={{ color: FG }}>Use the desktop app.</strong> It signs in to eBay on
+              your own machine — something your browser won&apos;t let a website do — so sold
+              comps work there.
+            </li>
+            <li>There&apos;s nothing to connect or configure here; this isn&apos;t a setting you&apos;re missing.</li>
+            <li>In the desktop app, use a <strong>separate eBay account</strong> for scanning, not the one you sell on. A scan runs many searches in a short window, and eBay may slow down or limit accounts doing that.</li>
+            <li>Bringing sold comps to the web is being worked on.</li>
+          </ul>
+          <a
+            href="/activate"
+            style={{ display: "inline-block", marginTop: 10, background: DIM, border: `1px solid ${GREEN}50`, color: GREEN, fontWeight: 700, fontSize: 12, padding: "8px 14px", borderRadius: 8, textDecoration: "none" }}
+          >
+            Get the desktop app →
+          </a>
+        </>
       )}
     </div>
   );
@@ -312,7 +328,7 @@ function StorePanel() {
 
   return (
     <div style={{ padding: 16, position: "relative", zIndex: 1 }}>
-      <EbayAccountNotice />
+      <EbayStatusNotice />
       <div style={{ display: "flex", gap: 8 }}>
         <input value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => { if (e.key === "Enter") scan(); }} placeholder="Paste a store or collection URL" style={inp} inputMode="url" autoCapitalize="none" spellCheck={false} />
         <button
@@ -428,6 +444,7 @@ function VehiclePanel() {
 
   return (
     <div style={{ padding: 16, position: "relative", zIndex: 1 }}>
+      <EbayStatusNotice />
       <div style={{ display: "flex", gap: 8 }}>
         <input value={vin} onChange={e => setVin(e.target.value.toUpperCase())} placeholder="Paste VIN (optional)" style={inp} autoCapitalize="characters" spellCheck={false} />
         <button onClick={decode} disabled={decoding || !vin.trim()} style={{ ...btnSecondary, opacity: (decoding || !vin.trim()) ? 0.5 : 1, whiteSpace: "nowrap" }}>{decoding ? "…" : "Decode"}</button>

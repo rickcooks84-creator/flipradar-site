@@ -139,7 +139,7 @@ export default function Activate() {
             {/* Download button (shown after verification) */}
             {status === "ok" && (
               <a
-                href="https://github.com/rickcooks84-creator/flipsonar-releases/releases/download/v1.0.0/FlipSonar.exe"
+                href="https://github.com/rickcooks84-creator/flipsonar-releases/releases/download/v1.2.7/FlipSonar-Setup-1.2.7.exe"
                 download
                 style={{
                   display: "block",
@@ -157,7 +157,7 @@ export default function Activate() {
                   textDecoration: "none",
                 }}
               >
-                ⬇ Download FlipSonar for Windows
+                ⬇ Download FlipSonar for Windows (v1.2.7)
               </a>
             )}
 
