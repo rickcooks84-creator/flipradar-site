@@ -1,4 +1,6 @@
 import * as cheerio from 'cheerio';
+import { stripFuzzyFiller, buildQuery, buildSearchUrl, cleanWords } from './ebay-dom.js';
+import { parseItems, isSignInWall, isThrottlePage, type EbayItem } from './ebay-cheerio';
 import { unstable_cache } from 'next/cache';
 import { isStopSignaled } from './stop-signal';
 
@@ -32,7 +34,7 @@ export interface EbayResult {
   comps: SoldComps;     // EMPTY unless status === 'ok'
 }
 
-export interface EbayItem { title: string; price: number; }
+export type { EbayItem };
 
 // Match whatever the installed cheerio version's load() returns (older @types/cheerio
 // returns `Root`, newer returns `CheerioAPI`) so this stays version-agnostic.
@@ -204,111 +206,8 @@ function fetchRaw(targetUrl: string, timeoutMs: number): Promise<RawResponse | n
 
 
 
-// ─── HTML parsing (cheerio, in-process) ──────────────────────────────────────
-
-function parsePrice(raw: string): number | null {
-  if (!raw || raw.indexOf(' to ') !== -1) return null; // skip price ranges like "$5 to $9"
-  const m = raw.match(/[\d,]+\.?\d*/);
-  if (!m) return null;
-  const p = parseFloat(m[0].replace(/,/g, ''));
-  return p >= 1 && p < 5000 ? p : null;
-}
-
-// eBay's "SORRY / Error Page" / bot challenge / consent interstitials. When we get one
-// the data is worthless AND it signals throttling — the scheduler must back off, not
-// cache a false "0 comps".
-function isThrottlePage(html: string, $: Cheerio$): boolean {
-
-  const title = ($('title').first().text() || '').toLowerCase();
-  if (/error page|interruption|are you a human|robot|access denied|pardon our interruption|unusual traffic/.test(title)) return true;
-  if (/pardon the interruption|verify you('| a)re a human|unusual activity from your/i.test(html.slice(0, 4000))) return true;
-  return false;
-}
-
-// eBay's SIGN-IN WALL on sold/completed searches.
-//
-// As of 2026-08 eBay gates completed-listing results (LH_Sold / LH_Complete) behind a
-// login: a signed-out request to a sold search 200s but returns the "Sign in or Register"
-// page instead of results. Verified to be SESSION-based, not IP- or proxy-based — a
-// residential IP with a warmed cookie jar and full browser headers gets the same wall,
-// while the identical search WITHOUT the sold filters still returns results normally.
-//
-// This is the single nastiest failure mode this file can have, because the wall is a
-// 200 with zero result cards — indistinguishable from "this product genuinely never sold"
-// unless we look for it. Left undetected it makes the scanner report NO MARKET on every
-// product of a store with daily sales, which is exactly backwards from the truth and is
-// worse than an outright error: the user acts on it.
-function isSignInWall(html: string, $: Cheerio$): boolean {
-  const title = ($('title').first().text() || '').toLowerCase();
-  if (/sign in or register/.test(title)) return true;
-  // Redirect landed on the signin host (captured in the canonical/og URL of the page).
-  if (/https:\/\/signin\.ebay\.[a-z.]+\//i.test(html.slice(0, 4000))) return true;
-  return false;
-}
-
-// When a search has FEW or NO exact matches, eBay pads the page with a
-// "Results matching fewer words" / "No exact matches found" section of FUZZY filler —
-// different brands and generic same-category items. A search for an LGNDRY "Lana" long
-// sleeve crop top with ZERO exact sold matches gets padded with random $8 Gymshark /
-// Free People crop tops; counting those as comps invents a whole fake sold history
-// (fake median, fake "52 sold", fake ROI) for a product that has no eBay resale market.
-// This filler must NEVER be treated as sold comps.
-//
-// eBay renders that divider as a section HEADING *between* result cards (a
-// `section-notice__main` span), NOT inside an `<li.s-card>`, so the per-card text check
-// in parseItems never sees it and every filler card after it gets scraped. Real exact
-// matches are always rendered BEFORE the divider, so we cut the HTML at the first divider
-// marker before parsing: good queries (no divider) keep every card unchanged; zero/low-
-// match queries drop all the filler. Verified on live eBay — bad query → 0 comps (correct),
-// 62-match query has no divider → all kept (no regression).
-const FUZZY_DIVIDER = /No exact matches found|Results matching fewer words|Results that closely match|matching fewer words/i;
-function stripFuzzyFiller(html: string): string {
-  const m = FUZZY_DIVIDER.exec(html);
-  return m ? html.slice(0, m.index) : html;
-}
-
-// Pull (title, price) pairs from the sold-results HTML. eBay serves THREE card layouts
-// depending on the session/rollout, and we must handle all of them or comps silently go to
-// zero when eBay flips a layout:
-//   • legacy  <li class="s-item">          (title .s-item__title, price .s-item__price)
-//   • interim <li class="s-card">          (title .s-card__title,  price .s-card__price)
-//   • newer   <div class="su-card-container"> (title .su-item-card__title, price .su-item-card__price)
-// The anonymous Electron/desktop session tends to get the NEW su-card layout; ScraperAPI
-// tends to get the legacy one — but eBay A/B-tests these, so we parse whichever appears.
-// The caller passes HTML already truncated at the fuzzy-match divider (see stripFuzzyFiller);
-// we additionally break on the divider per-card as defense-in-depth, and skip the "Shop on
-// eBay" promo placeholder card.
-function parseItems(html: string, $: Cheerio$): EbayItem[] {
-
-  const items: EbayItem[] = [];
-  const cards = $('li.s-card, li.s-item, .su-card-container');
-
-  cards.each((_, el) => {
-    const $el = $(el);
-    const etext = $el.text();
-    if (/Results matching fewer words/i.test(etext) || /Results that closely match/i.test(etext)) {
-      return false; // break: stop at the relevance divider
-    }
-    const title = (
-      $el.find('.s-card__title, .s-item__title, .su-item-card__title').first().text() ||
-      $el.find('[class*="title"]').first().text() ||
-      ''
-    ).trim();
-    if (!title || /Shop on eBay/i.test(title)) return;
-
-    const priceText = (
-      $el.find('.s-card__price, .s-item__price, .su-item-card__price').first().text() ||
-      $el.find('[class*="price"]').first().text() ||
-      ''
-    ).trim();
-    const price = parsePrice(priceText);
-    if (price == null) return;
-
-    items.push({ title, price });
-  });
-
-  return items;
-}
+// HTML parsing lives in ./ebay-cheerio (importable without a Next runtime, so it can be
+// unit-tested against the extension's DOM parser — see scripts/test-parser-parity.mjs).
 
 // ─── Relevance scoring (replaces the single brand-word `includes` gate) ──────
 //
@@ -404,7 +303,7 @@ function tokenize(s: string): string[] {
 const COVER_MIN = 0.55;        // fraction of identity weight a title must cover
 const COVER_BRAND_RELAX = 0.15; // a real brand match relaxes the coverage bar this much
 
-function relevantPrices(items: EbayItem[], queryTokens: string[]): number[] {
+export function relevantPrices(items: EbayItem[], queryTokens: string[]): number[] {
   if (!queryTokens.length) return items.map(i => i.price);
   const brand = queryTokens[0];
   const hasBrand = brand.length > 2;
@@ -445,6 +344,7 @@ function relevantPrices(items: EbayItem[], queryTokens: string[]): number[] {
 }
 
 // Exposed for offline unit tests (validates the relevance gate without any network).
+// Exposed for offline unit tests (validates the relevance gate without any network).
 export const __test = { relevantPrices, tokenize, cleanWords, tokenWeight };
 
 // Trim price outliers before computing the median: eBay sold results mix singles with
@@ -484,30 +384,10 @@ export function calcComps(rawPrices: number[], scanned: number): SoldComps {
 
 // ─── Query building ──────────────────────────────────────────────────────────
 
-const NOISE_WORDS = new Set([
-  'gift', 'gifts', 'set', 'sets', 'bundle', 'bundles', 'pack', 'packs', 'variety',
-  'sample', 'samples', 'single', 'serve', 'option', 'options', 'video', 'value',
-  'satisfaction', 'guarantee', 'guaranteed', 'days', 'day', 'free', 'shipping',
-  'bonus', 'deal', 'sale', 'official', 'authentic', 'brand', 'the', 'and', 'with',
-  'for', 'your',
-]);
+// NOISE_WORDS, cleanWords, buildQuery and buildSearchUrl come from ./ebay-dom so the
+// extension searches eBay for the EXACT string the server scores its results against.
 
-function cleanWords(query: string): string[] {
-  return query
-    .toLowerCase()
-    .replace(/\(.*?\)/g, ' ')
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length > 1 && !/^\d+$/.test(w) && !NOISE_WORDS.has(w));
-}
 
-function buildSearchUrl(keywords: string): string {
-  const qs = new URLSearchParams({
-    _nkw: keywords, LH_Complete: '1', LH_Sold: '1',
-    _sacat: '0', _ipg: '60', _sop: '13', // _sop=13 = ended recently (fresher comps)
-  });
-  return `https://www.ebay.com/sch/i.html?${qs}`;
-}
 
 // ─── Single search with classification ───────────────────────────────────────
 // Returns a status the scheduler acts on. No internal retry here — retry/backoff is
@@ -683,8 +563,8 @@ export interface CompsOptions {
 export async function getSoldComps(query: string, opts: CompsOptions = {}): Promise<EbayResult> {
   if (isStopSignaled()) return { status: 'error', comps: EMPTY };
 
-  const words = cleanWords(query);
-  if (!words.length) return { status: 'empty', comps: EMPTY };
+  const { keywords, tokens } = buildQuery(query);
+  if (!keywords) return { status: 'empty', comps: EMPTY };
 
   const timeoutMs = opts.timeoutMs ?? 12000;
   const run = opts.run ?? ((fn) => fn());
@@ -696,9 +576,7 @@ export async function getSoldComps(query: string, opts: CompsOptions = {}): Prom
   // brand-prefixed query is already the most relevant; a broader fallback also tends to
   // pull in false comps. So we keep the single best query. (To re-enable a fallback for
   // accuracy on small scans, gate it behind opts.)
-  const kw = words.slice(0, 6).join(' '); // cap length; brand stays first
   if (isStopSignaled()) return { status: 'error', comps: EMPTY };
-  const tokens = cleanWords(kw);
-  return run(() => searchOnce(kw, tokens, timeoutMs));
+  return run(() => searchOnce(keywords, tokens, timeoutMs));
 }
 

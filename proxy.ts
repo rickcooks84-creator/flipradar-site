@@ -22,6 +22,8 @@ export const config = {
     '/scan/:path*',
     '/api/store-scrape/:path*',
     '/api/comp/:path*',
+    '/api/comp-items/:path*',
+    '/api/vehicle-comp-items/:path*',
     '/api/vehicle-scan/:path*',
     '/api/vehicle-parts/:path*',
     '/api/vin/:path*',

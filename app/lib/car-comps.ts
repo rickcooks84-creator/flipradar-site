@@ -170,9 +170,23 @@ export async function getCarPartComps(
 ): Promise<CarCompResult> {
   const query = carPartQuery(v, part);
   const res = await fetchSoldItems(query, timeoutMs);
-
   if (res.status !== 'ok') return { status: res.status, comps: EMPTY, parsed: res.items.length };
+  return carPartCompsFromItems(v, part, res.items);
+}
 
+// Score already-fetched listings for THIS vehicle.
+//
+// Split out of getCarPartComps because the listings can now arrive two ways: fetched
+// server-side (above), or fetched by the browser extension inside the user's own signed-in
+// eBay session and posted back. Only the FETCH differs between those — the vehicle-fit
+// relevance gate, the sub-assembly price floor and the comp maths stay here, server-side
+// and identical, so a part can never score differently depending on which path got the page.
+export function carPartCompsFromItems(
+  v: Pick<Vehicle, 'year' | 'make' | 'model'>,
+  part: PartDef,
+  items: EbayItem[],
+): CarCompResult {
+  const res = { items };
   const relevant: EbayItem[] = res.items.filter(it => isRelevantCarComp(it.title, v, part.mustMatch, part.fit ?? 'model', part.exclude));
   // Floor out sub-assembly noise (see PartDef.minPrice): a real transmission/engine/door is
   // never $30, so a price below the floor is an accessory that slipped past the word filters.

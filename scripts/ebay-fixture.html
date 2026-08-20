@@ -1,0 +1,69 @@
+<!-- Synthetic eBay sold-results page used by scripts/test-parser-parity.mjs.
+     Covers all THREE card layouts eBay serves, plus every card the parsers are supposed to
+     reject: the "Shop on eBay" promo placeholder, a price RANGE (tells us nothing about what
+     one unit sold for), a card with no price at all, and the fuzzy-match filler eBay pads a
+     thin search with. Exactly six items should survive. -->
+<html>
+<head><title>nike air max 90: Search Result | eBay</title></head>
+<body>
+<ul class="srp-results">
+
+  <!-- legacy layout -->
+  <li class="s-item">
+    <div class="s-item__title">Nike Air Max 90 Mens Size 10 White Black</div>
+    <span class="s-item__price">$84.50</span>
+  </li>
+  <li class="s-item">
+    <div class="s-item__title">Shop on eBay</div>
+    <span class="s-item__price">$20.00</span>
+  </li>
+  <li class="s-item">
+    <div class="s-item__title">Nike Air Max 90 Job Lot Bundle</div>
+    <span class="s-item__price">$5.00 to $9.00</span>
+  </li>
+  <li class="s-item">
+    <div class="s-item__title">Nike Air Max 90 Infrared OG</div>
+    <span class="s-item__price">$1,240.00</span>
+  </li>
+
+  <!-- interim layout -->
+  <li class="s-card">
+    <div class="s-card__title">Nike Air Max 90 Essential Triple Black</div>
+    <span class="s-card__price">$97.00</span>
+  </li>
+  <li class="s-card">
+    <div class="s-card__title">Nike Air Max 90 No Price Listed</div>
+    <span class="s-card__price"></span>
+  </li>
+
+  <!-- newer layout -->
+  <div class="su-card-container">
+    <div class="su-item-card__title">Nike Air Max 90 Womens UK 5 Pink</div>
+    <span class="su-item-card__price">$62.99</span>
+  </div>
+  <div class="su-card-container">
+    <div class="su-item-card__title">Nike Air Max 90 Premium Leather Brown</div>
+    <span class="su-item-card__price">$110.00</span>
+  </div>
+
+  <!-- unknown future layout: falls back to the loose [class*=title] / [class*=price] pair -->
+  <li class="s-card">
+    <div class="listing-headline-title">Nike Air Max 90 Ultra Moire Grey</div>
+    <span class="listing-final-price">$45.25</span>
+  </li>
+
+  <!-- everything past here is eBay's filler and must NOT be counted -->
+  <span class="section-notice__main">Results matching fewer words</span>
+
+  <li class="s-item">
+    <div class="s-item__title">Adidas Gazelle Mens Size 10 Blue</div>
+    <span class="s-item__price">$38.00</span>
+  </li>
+  <div class="su-card-container">
+    <div class="su-item-card__title">Puma Suede Classic Red</div>
+    <span class="su-item-card__price">$29.99</span>
+  </div>
+
+</ul>
+</body>
+</html>

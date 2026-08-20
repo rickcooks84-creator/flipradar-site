@@ -4,8 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
+    "build": "node scripts/build-extension.mjs && next build",
+    "start": "next start",
+    "ext:build": "node scripts/build-extension.mjs",
+    "test:parser": "node scripts/test-parser-parity.mjs",
+    "test:ext": "node scripts/test-extension-e2e.mjs"
   },
   "dependencies": {
     "cheerio": "^1.2.0",

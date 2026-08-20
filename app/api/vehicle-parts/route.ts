@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { decodeVin, vehicleLabel, type Vehicle } from '@/app/lib/vehicle';
 import { partsForVehicle } from '@/app/lib/parts-catalog';
+import { carPartQuery } from '@/app/lib/car-comps';
 
 // Returns the vehicle + the list of parts that apply to it, WITHOUT comps. The client
 // renders these rows immediately, then fetches comps one part at a time via
@@ -28,8 +29,12 @@ export async function POST(req: NextRequest) {
     engine: decoded?.engine, bodyClass: decoded?.bodyClass, drive: decoded?.drive, turbo: decoded?.turbo,
   };
 
+  // `query` is included so the browser extension can fetch each part's sold page inside
+  // the user's eBay session. It is built HERE, with the same carPartQuery the scorer uses,
+  // so the search that runs and the search that gets scored are the same string.
   const parts = partsForVehicle(vehicle).map(p => ({
     id: p.id, label: p.label, category: p.category, ship: p.ship, note: p.note,
+    query: carPartQuery(vehicle, p),
   }));
 
   return NextResponse.json({

@@ -42,3 +42,7 @@ next-env.d.ts
 
 .vercel
 .env*
+
+# Generated at build time by scripts/build-extension.mjs — never commit it, or the
+# download can drift from extension/ source.
+/public/flipsonar-ebay-connector.zip
