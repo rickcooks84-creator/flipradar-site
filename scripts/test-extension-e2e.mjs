@@ -30,7 +30,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const EXT_DIR = path.join(ROOT, 'extension');
+const EXT_DIR = process.env.EXT_DIR || path.join(ROOT, 'extension');
 const PORT = 3000; // must match a content_scripts match pattern in the manifest
 const OVERALL_TIMEOUT_MS = 90_000;
 
