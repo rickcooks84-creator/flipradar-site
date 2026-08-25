@@ -8,6 +8,7 @@
     "start": "next start",
     "ext:build": "node scripts/build-extension.mjs",
     "test:parser": "node scripts/test-parser-parity.mjs",
+    "test:session": "node scripts/test-session.mjs",
     "test:ext": "node scripts/test-extension-e2e.mjs",
     "spike:browserbase": "node scripts/browserbase-spike.mjs"
   },
