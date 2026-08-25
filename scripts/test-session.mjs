@@ -21,6 +21,10 @@ import {
   signSession, verifySession, needsRefresh, needsReverify, reverifySoon,
   sessionCookieOptions,
 } from '../app/lib/session.ts';
+import {
+  signState, verifyState, signConnection, readConnection, hasInsights,
+  authorizeUrl, ebayConfigured, ebayCookieOptions, INSIGHTS_SCOPE,
+} from '../app/lib/ebay-oauth.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -98,6 +102,42 @@ t('the bare domain is scoped to .flipsonar.io', sessionCookieOptions('flipsonar.
 t('localhost stays host-only', sessionCookieOptions('localhost:3111').domain === undefined);
 t('the cookie outlives the browser session', opts.maxAge === 365 * 24 * 60 * 60 && opts.httpOnly === true);
 
+// ── the eBay connection cookie ───────────────────────────────────────────────
+//
+// It carries an OAuth refresh token, so forging it is the interesting attack: a valid-looking
+// fs_ebay would let someone spend FlipSonar's client credentials against an account of their
+// choosing. And `state` is what stops a third party walking a logged-in user through a
+// connection they never started.
+const conn = { refreshToken: 'v^1.1#refresh#token', scopes: ['https://api.ebay.com/oauth/api_scope'], connectedAt: Date.now() };
+const stored = await readConnection(await signConnection(conn));
+t('a connection round-trips', stored?.refreshToken === conn.refreshToken);
+t('granted scopes survive the round trip', stored?.scopes.join() === conn.scopes.join());
+t('a tampered connection cookie is rejected', (await readConnection((await signConnection(conn)).replace(/^./, 'X'))) === null);
+t('garbage is not a connection', (await readConnection('nope')) === null);
+t('no cookie is not a connection', (await readConnection(undefined)) === null);
+
+// The whole point of the honest UI: connected does not imply sold data.
+t('a base-scope connection does NOT claim Insights', !hasInsights(stored));
+t('an Insights-scoped connection does', hasInsights({ ...conn, scopes: [INSIGHTS_SCOPE] }));
+
+const state = await signState('mem_abc');
+t('state verifies for the user who started the flow', await verifyState(state, 'mem_abc'));
+t('state does NOT verify for a different user', !(await verifyState(state, 'mem_someone_else')));
+t('a forged state is rejected', !(await verifyState(state.replace(/^./, 'X'), 'mem_abc')));
+t('a missing state is rejected', !(await verifyState(undefined, 'mem_abc')));
+t('two flows get different states', (await signState('mem_abc')) !== (await signState('mem_abc')));
+
+t('the eBay cookie is httpOnly and domain-scoped', ebayCookieOptions('www.flipsonar.io').domain === '.flipsonar.io'
+  && ebayCookieOptions('www.flipsonar.io').httpOnly === true);
+
+// The authorize URL is what eBay validates; a wrong shape fails at the consent screen.
+const auth = new URL(authorizeUrl(state));
+t('authorize points at eBay consent', auth.origin + auth.pathname === 'https://auth.ebay.com/oauth2/authorize');
+t('authorize asks for the sold-data scope', (auth.searchParams.get('scope') || '').includes(INSIGHTS_SCOPE));
+t('authorize carries the state', auth.searchParams.get('state') === state);
+t('authorize is an authorization_code flow', auth.searchParams.get('response_type') === 'code');
+t('ebayConfigured() is false without a RuName', ebayConfigured() === !!process.env.EBAY_RUNAME);
+
 // ── live proxy (optional) ────────────────────────────────────────────────────
 const BASE = process.env.FS_BASE;
 const reachable = BASE && await fetch(BASE, { redirect: 'manual' }).then(() => true).catch(() => false);
@@ -143,6 +183,26 @@ if (!reachable) {
   r = await get('/login', good);
   t('an already-signed-in visitor to /login → /scan', r.status === 307 && (r.headers.get('location') || '').endsWith('/scan'), String(r.status));
   t('a signed-out visitor to /login gets the form', (await get('/login')).status === 200);
+
+  // eBay routes are gated on the FlipSonar session, not just the proxy matcher.
+  t('eBay status needs a login', (await get('/api/ebay/status')).status === 401);
+  t('eBay disconnect needs a login',
+    (await fetch(BASE + '/api/ebay/disconnect', { method: 'POST', redirect: 'manual' })).status === 401);
+  r = await get('/api/ebay/connect');
+  t('eBay connect needs a login', r.status === 307 && (r.headers.get('location') || '').endsWith('/login'), String(r.status));
+
+  r = await get('/api/ebay/connect', good);
+  const dest = r.headers.get('location') || '';
+  // With no EBAY_RUNAME configured this must say so rather than bouncing users to a broken
+  // eBay consent screen; with one, it must be a real authorize URL carrying a state.
+  t('eBay connect goes somewhere honest',
+    dest.includes('ebay=unconfigured') || (dest.startsWith('https://auth.ebay.com/oauth2/authorize') && dest.includes('state=')),
+    dest.slice(0, 90));
+
+  // A logged-in user with no connection is reported as not connected, not as an error.
+  const st = await (await get('/api/ebay/status', good)).json();
+  t('no eBay connection reads as not connected', st.connected === false);
+  t('status reports whether the server is configured', typeof st.configured === 'boolean');
 
   // Needs WHOP_API_KEY on the server: a stale session for a membership Whop has never heard of.
   const stale = await signSession('mem_definitely_not_a_real_membership', { verifiedAt: Date.now() - 8 * DAY });

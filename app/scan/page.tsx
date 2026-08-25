@@ -195,54 +195,152 @@ function useScanCooldown() {
   return { remainingMs, active: remainingMs > 0, start };
 }
 
-// ─── eBay status notice ───────────────────────────────────────────────────────
+// ─── eBay connection ──────────────────────────────────────────────────────────
 //
-// This used to say "sold prices come from your own eBay session", which is true of the
-// DESKTOP app and has never been true here. On the web there is no eBay session and no
-// way to offer one: eBay only serves sold listings to signed-in users, and a website can
-// never borrow that sign-in — the cookies are HttpOnly and scoped to ebay.com, and eBay
-// sends no CORS headers, so this page is locked out twice over by the browser itself.
+// Users can now connect their own eBay account here (the same OAuth flow Auto List Bot
+// uses). What that connection is WORTH is the part this component has to be careful about.
 //
-// Telling users to "use a separate eBay account" while giving them nothing to connect is
-// worse than saying nothing: it implies a setting they'll go hunting for and never find.
-// So this states the limitation plainly and sends them to the one place it does work.
-function EbayStatusNotice() {
-  const [open, setOpen] = useState(false);
+// FlipSonar scores on SOLD prices. The only official sold endpoint is eBay's Marketplace
+// Insights API, and eBay grants that scope to the APP, not to the user consenting — this
+// app's request was refused (invalid_scope). So a user can connect successfully and still
+// get no comps, which is exactly the kind of thing a UI is tempted to paper over.
+//
+// It doesn't: `insights` is reported separately from `connected`, and until eBay grants the
+// scope this says so in as many words. An earlier version of this page promised an eBay
+// connection the web couldn't deliver, and that was worse than saying nothing — the fix
+// isn't to promise it again, it's to show exactly how far the connection actually gets.
+
+interface EbayStatus {
+  connected: boolean;
+  live?: boolean;
+  insights?: boolean;
+  configured: boolean;
+  connectedAt?: number;
+  error?: string;
+}
+
+// Outcomes handed back by /api/ebay/callback via ?ebay=…
+const EBAY_RETURN: Record<string, { tone: string; text: string }> = {
+  connected: { tone: GREEN, text: "eBay account connected — sold comps are on." },
+  connected_no_insights: { tone: AMBER, text: "eBay account connected, but eBay didn't grant sold-data access. Comps stay unavailable until the app is approved." },
+  declined: { tone: MUTED, text: "eBay connection cancelled." },
+  state_mismatch: { tone: RED, text: "That connection request didn't match — start it again from this page." },
+  scope_refused: { tone: AMBER, text: "eBay refused the sold-data permission for this app. Nothing was connected." },
+  unconfigured: { tone: RED, text: "eBay isn't set up on the server yet." },
+  error: { tone: RED, text: "eBay couldn't complete the connection. Try again." },
+};
+
+function EbayConnection() {
+  const [status, setStatus] = useState<EbayStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [returned, setReturned] = useState<{ tone: string; text: string } | null>(null);
+
+  useEffect(() => {
+    // Read (and clear) the ?ebay= reason so a refresh doesn't replay a stale message.
+    const params = new URLSearchParams(window.location.search);
+    const reason = params.get("ebay");
+    if (reason) {
+      setReturned(EBAY_RETURN[reason] ?? EBAY_RETURN.error);
+      params.delete("ebay");
+      const qs = params.toString();
+      window.history.replaceState({}, "", window.location.pathname + (qs ? "?" + qs : ""));
+    }
+    fetch("/api/ebay/status")
+      .then(r => r.json())
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  }, []);
+
+  async function disconnect() {
+    setBusy(true);
+    try {
+      await fetch("/api/ebay/disconnect", { method: "POST" });
+      setStatus({ connected: false, configured: status?.configured ?? true });
+      setReturned(null);
+    } catch { /* leave the current state alone */ }
+    setBusy(false);
+  }
+
+  const connected = !!status?.connected;
+  const insights = !!status?.insights;
+  const tone = connected ? (insights ? GREEN : AMBER) : AMBER;
+
   return (
-    <div style={{ background: SURFACE, border: `1px solid ${AMBER}44`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+    <div style={{ background: SURFACE, border: `1px solid ${tone}44`, borderRadius: 10, padding: "10px 12px", marginBottom: 10 }}>
+      {returned && (
+        <div style={{ fontSize: 12, color: returned.tone, fontWeight: 700, marginBottom: 8, lineHeight: 1.5 }}>
+          {returned.text}
+        </div>
+      )}
+
       <div style={{ fontSize: 12, color: FG, lineHeight: 1.5 }}>
-        <span style={{ color: AMBER, fontWeight: 700 }}>Sold prices aren&apos;t available in the browser ·</span>{" "}
-        eBay only shows sold listings to signed-in users, and a website can&apos;t use your eBay
-        account. Scans here still list a store&apos;s products and prices, but comps will report
-        that they couldn&apos;t be checked rather than guess.{" "}
-        <button
-          onClick={() => setOpen(o => !o)}
-          style={{ background: "transparent", border: "none", color: AMBER, fontSize: 12, fontWeight: 700, padding: 0, textDecoration: "underline", cursor: "pointer" }}
-        >
-          {open ? "Hide details" : "What can I do?"}
-        </button>
+        {connected && insights && (
+          <>
+            <span style={{ color: GREEN, fontWeight: 700 }}>eBay connected ·</span>{" "}
+            Sold comps are read through your own eBay account.
+          </>
+        )}
+        {connected && !insights && (
+          <>
+            <span style={{ color: AMBER, fontWeight: 700 }}>eBay connected — sold data not granted ·</span>{" "}
+            Your account is linked, but eBay hasn&apos;t approved FlipSonar for sold-listing
+            access, so comps still can&apos;t be checked. Nothing more for you to do; the
+            approval is on eBay&apos;s side.
+          </>
+        )}
+        {!connected && (
+          <>
+            <span style={{ color: AMBER, fontWeight: 700 }}>Sold prices aren&apos;t available yet ·</span>{" "}
+            eBay only shows sold listings to signed-in users. You can connect your eBay account
+            below, but be aware it won&apos;t switch comps on by itself &mdash; eBay still has to
+            approve FlipSonar for sold-listing access. Scans list a store&apos;s products and
+            prices either way, and report comps as unchecked rather than guessing.
+          </>
+        )}
       </div>
 
-      {open && (
-        <>
-          <ul style={{ fontSize: 12, color: MUTED, lineHeight: 1.65, margin: "10px 0 2px", paddingLeft: 18 }}>
-            <li>
-              <strong style={{ color: FG }}>Use the desktop app.</strong> It signs in to eBay on
-              your own machine — something your browser won&apos;t let a website do — so sold
-              comps work there.
-            </li>
-            <li>There&apos;s nothing to connect or configure here; this isn&apos;t a setting you&apos;re missing.</li>
-            <li>In the desktop app, use a <strong>separate eBay account</strong> for scanning, not the one you sell on. A scan runs many searches in a short window, and eBay may slow down or limit accounts doing that.</li>
-            <li>Bringing sold comps to the web is being worked on.</li>
-          </ul>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, alignItems: "center" }}>
+        {!connected && status?.configured !== false && (
           <a
-            href="/activate"
-            style={{ display: "inline-block", marginTop: 10, background: DIM, border: `1px solid ${GREEN}50`, color: GREEN, fontWeight: 700, fontSize: 12, padding: "8px 14px", borderRadius: 8, textDecoration: "none" }}
+            href="/api/ebay/connect"
+            style={{ background: DIM, border: `1px solid ${GREEN}50`, color: GREEN, fontWeight: 700, fontSize: 12, padding: "8px 14px", borderRadius: 8, textDecoration: "none" }}
           >
-            Get the desktop app →
+            Connect eBay account →
           </a>
-        </>
+        )}
+        {connected && (
+          <button
+            onClick={disconnect}
+            disabled={busy}
+            style={{ background: "transparent", border: `1px solid ${BORDER}`, color: MUTED, fontWeight: 700, fontSize: 12, padding: "8px 14px", borderRadius: 8, opacity: busy ? 0.6 : 1 }}
+          >
+            {busy ? "Disconnecting…" : "Disconnect eBay"}
+          </button>
+        )}
+        <a
+          href="/activate"
+          style={{ background: "transparent", border: `1px solid ${BORDER}`, color: MUTED, fontWeight: 700, fontSize: 12, padding: "8px 14px", borderRadius: 8, textDecoration: "none" }}
+        >
+          Get the desktop app →
+        </a>
+      </div>
+
+      {connected && (
+        <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+          Disconnecting removes FlipSonar&apos;s copy of your token. To revoke the permission on
+          eBay&apos;s side, use your eBay account settings.
+          {status?.live === false && status?.error && (
+            <> · eBay reported: {status.error}</>
+          )}
+        </div>
       )}
+
+      <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+        The <strong style={{ color: FG }}>desktop app</strong> signs in to eBay on your own
+        machine &mdash; something a website can&apos;t do &mdash; so sold comps work there today.
+        Use a separate eBay account for scanning, not the one you sell on: a scan runs many
+        searches in a short window.
+      </div>
     </div>
   );
 }
@@ -328,7 +426,7 @@ function StorePanel() {
 
   return (
     <div style={{ padding: 16, position: "relative", zIndex: 1 }}>
-      <EbayStatusNotice />
+      <EbayConnection />
       <div style={{ display: "flex", gap: 8 }}>
         <input value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => { if (e.key === "Enter") scan(); }} placeholder="Paste a store or collection URL" style={inp} inputMode="url" autoCapitalize="none" spellCheck={false} />
         <button
@@ -444,7 +542,7 @@ function VehiclePanel() {
 
   return (
     <div style={{ padding: 16, position: "relative", zIndex: 1 }}>
-      <EbayStatusNotice />
+      <EbayConnection />
       <div style={{ display: "flex", gap: 8 }}>
         <input value={vin} onChange={e => setVin(e.target.value.toUpperCase())} placeholder="Paste VIN (optional)" style={inp} autoCapitalize="characters" spellCheck={false} />
         <button onClick={decode} disabled={decoding || !vin.trim()} style={{ ...btnSecondary, opacity: (decoding || !vin.trim()) ? 0.5 : 1, whiteSpace: "nowrap" }}>{decoding ? "…" : "Decode"}</button>

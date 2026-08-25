@@ -9,6 +9,10 @@
     "esModuleInterop": true,
     "module": "esnext",
     "moduleResolution": "bundler",
+    // Local .ts imports carry their extension (as ./ebay-dom.js already does) so the
+    // scripts/*.mjs test harnesses can import these modules directly under plain Node,
+    // whose ESM resolver does no extension guessing.
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "react-jsx",

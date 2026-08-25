@@ -14,34 +14,9 @@
 // was last checked against Whop — so a cancelled subscriber can't hold a permanent session
 // (see needsReverify + the proxy).
 //
-// This module uses ONLY Web Crypto (crypto.subtle) + btoa/atob so the SAME code runs in
-// the Edge middleware (which verifies the cookie on every request) and in the Node route
-// handlers (which mint it). No Node-only APIs, no external deps.
+// The HMAC signing itself lives in ./signed, shared with the eBay connection cookie.
 
-const enc = new TextEncoder();
-
-function secret(): string {
-  return process.env.SESSION_SECRET || 'dev-insecure-secret-change-me';
-}
-
-async function hmacKey(): Promise<CryptoKey> {
-  return crypto.subtle.importKey('raw', enc.encode(secret()), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign', 'verify']);
-}
-
-function b64url(bytes: Uint8Array): string {
-  let s = '';
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function fromB64url(str: string): Uint8Array {
-  let s = str.replace(/-/g, '+').replace(/_/g, '/');
-  while (s.length % 4) s += '=';
-  const bin = atob(s);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
+import { signPayload, verifyPayload } from './signed.ts';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -80,31 +55,20 @@ export async function signSession(
     i: now,
     v: opts.verifiedAt ?? now,
   };
-  const body = b64url(enc.encode(JSON.stringify(payload)));
-  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', await hmacKey(), enc.encode(body) as BufferSource));
-  return `${body}.${b64url(sig)}`;
+  return signPayload(payload);
 }
 
 export async function verifySession(token?: string | null): Promise<Session | null> {
-  if (!token || token.indexOf('.') < 0) return null;
-  const [body, sig] = token.split('.');
-  if (!body || !sig) return null;
-  try {
-    const ok = await crypto.subtle.verify('HMAC', await hmacKey(), fromB64url(sig) as BufferSource, enc.encode(body) as BufferSource);
-    if (!ok) return null;
-    const payload = JSON.parse(new TextDecoder().decode(fromB64url(body)));
-    if (!payload?.k || typeof payload.e !== 'number' || Date.now() > payload.e) return null;
-    // Cookies minted before the rolling-session change carry no `i`/`v`. Treating both as 0
-    // upgrades them on the holder's next visit (refresh + one re-verify) instead of stranding
-    // them on the old 30-day clock.
-    return {
-      key: String(payload.k),
-      issuedAt: typeof payload.i === 'number' ? payload.i : 0,
-      verifiedAt: typeof payload.v === 'number' ? payload.v : 0,
-    };
-  } catch {
-    return null;
-  }
+  const payload = await verifyPayload<{ k?: unknown; i?: unknown; v?: unknown }>(token);
+  if (!payload?.k) return null;
+  // Cookies minted before the rolling-session change carry no `i`/`v`. Treating both as 0
+  // upgrades them on the holder's next visit (refresh + one re-verify) instead of stranding
+  // them on the old 30-day clock.
+  return {
+    key: String(payload.k),
+    issuedAt: typeof payload.i === 'number' ? payload.i : 0,
+    verifiedAt: typeof payload.v === 'number' ? payload.v : 0,
+  };
 }
 
 /** True once the cookie is old enough to be worth re-minting with a fresh expiry. */
